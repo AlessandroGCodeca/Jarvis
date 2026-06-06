@@ -1,0 +1,29 @@
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+
+# ---- Secrets ----
+.env
+backend/.env
+
+# ---- Node / Vite ----
+node_modules/
+dist/
+.vite/
+
+# ---- SQLite (JARVIS memory store) ----
+*.db
+*.sqlite
+*.sqlite3
+jarvis_memory.db
+
+# ---- OS / editor ----
+.DS_Store
+Thumbs.db
+*.log
+.idea/
+.vscode/
