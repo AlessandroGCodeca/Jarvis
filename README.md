@@ -1,0 +1,126 @@
+# JARVIS — a voice-first AI assistant for macOS
+
+A voice-first assistant with an audio-reactive particle orb. Speak to it in your
+browser; it thinks with Claude, talks back with ElevenLabs, and can drive your
+Mac's Calendar, Mail, Notes, Terminal, and the web.
+
+```
+Microphone → Web Speech API → WebSocket → FastAPI → Claude (Haiku)
+          → ElevenLabs TTS → WebSocket → Browser speaker
+```
+
+- **Backend:** Python + FastAPI, SQLite (FTS5) memory, AppleScript bridges,
+  Claude tool-calling, ElevenLabs TTS (with a local `say` fallback).
+- **Frontend:** Vite + TypeScript (vanilla), a Three.js audio-reactive orb,
+  Web Speech API input, auto-reconnecting WebSocket client.
+
+---
+
+## Prerequisites
+
+- **Python 3.11+**
+- **Node 18+**
+- **macOS** — required for the AppleScript bridges (Calendar, Mail, Notes) and
+  the `say` TTS fallback. The web search, terminal, and Claude features work on
+  any OS; the macOS-only bridges fail gracefully elsewhere.
+- API keys: an [Anthropic](https://console.anthropic.com/) key and (optionally)
+  an [ElevenLabs](https://elevenlabs.io/) key + voice ID. Without ElevenLabs,
+  JARVIS falls back to the macOS `say` command and the UI shows text only.
+
+---
+
+## Setup
+
+### 1. Backend
+
+```bash
+cd backend
+python3 -m venv .venv && source .venv/bin/activate   # optional but recommended
+pip install -r requirements.txt
+cp .env.example .env          # then edit .env and fill in your keys
+```
+
+`.env`:
+
+```
+ANTHROPIC_API_KEY=sk-ant-...
+ELEVENLABS_API_KEY=...
+ELEVENLABS_VOICE_ID=...
+# optional overrides:
+# CLAUDE_MODEL=claude-haiku-4-5
+# ELEVENLABS_MODEL_ID=eleven_multilingual_v2
+# ELEVENLABS_OUTPUT_FORMAT=mp3_44100_128
+```
+
+### 2. Run the backend
+
+```bash
+cd backend
+uvicorn main:app --reload --port 8000
+```
+
+### 3. Run the frontend
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+### 4. Use it
+
+Open **http://localhost:5173**, click the mic button, and speak. Toggle the
+conversation log with the **L** key; open **Settings** (top-left) to store keys
+in your browser.
+
+---
+
+## AppleScript permissions
+
+The Calendar / Mail / Notes / Terminal bridges run via `osascript`. macOS will
+prompt for automation permission the first time. If a bridge silently returns
+"unavailable", grant access under:
+
+**System Settings → Privacy & Security → Automation** → allow your terminal (or
+the process running `uvicorn`) to control **Calendar**, **Mail**, and **Notes**.
+
+---
+
+## How it works
+
+- `main.py` — FastAPI app + `/ws` WebSocket. Accepts `{type:"message", content}`
+  and `{type:"ping"}`; replies with `{type:"response", text, audio}` /
+  `{type:"pong"}`. CORS is enabled for `localhost:5173`.
+- `claude_client.py` — `JarvisBrain` keeps the last ~20 messages and runs a
+  synchronous tool-use loop. Tools: `get_calendar`, `get_emails`, `create_note`,
+  `search_web`, `run_command`. Model defaults to `claude-haiku-4-5` (override
+  with `CLAUDE_MODEL`).
+- `tts_module.py` — ElevenLabs streaming TTS → base64 MP3; falls back to `say`
+  and returns `None` (frontend shows text only).
+- `memory.py` — SQLite FTS5 store: `save_memory`, `search_memory`, `get_recent`.
+- `calendar_module.py` / `mail_module.py` / `notes_module.py` — AppleScript
+  bridges, each wrapped to fail gracefully.
+- `browser_module.py` — DuckDuckGo HTML search + stdlib HTML-to-text fetch
+  (no extra dependencies).
+- `system_actions.py` — `run_command` (10s timeout) and `open_app`.
+
+Frontend (`frontend/src/`):
+
+- `orb.ts` — `OrbVisualizer`: ~2000-particle fibonacci sphere, additive
+  blending, four states (idle / listening / thinking / speaking) with lerped
+  transitions, and a shared `AudioContext` + `AnalyserNode` for reactivity.
+- `voice.ts` — `VoiceInput`: Web Speech API with interim + final transcripts.
+- `websocket.ts` — `WSClient`: auto-reconnect (exp. backoff), decodes base64
+  audio into the orb's AudioContext, drives orb state across the message flow.
+- `ui.ts` — `UI`: mic button, status, transcript, conversation log, settings.
+- `main.ts` — wires it all together.
+
+---
+
+## Notes & limitations
+
+- Localhost only; no auth, single user — by design (MVP).
+- Web Speech API recognition works best in Chrome/Edge.
+- The orb requires WebGL; audio playback requires a user gesture (the mic click
+  unlocks the AudioContext).
+- Tool calls run synchronously within the response cycle (no background tasks).

@@ -1,0 +1,93 @@
+"""macOS Mail bridge via AppleScript (osascript).
+
+All calls fail gracefully when Mail or automation permission is unavailable.
+"""
+
+import subprocess
+
+
+def _run_applescript(script: str):
+    try:
+        result = subprocess.run(
+            ["osascript", "-e", script],
+            capture_output=True,
+            text=True,
+            timeout=20,
+        )
+        if result.returncode != 0:
+            return None, (result.stderr or "AppleScript error").strip()
+        return result.stdout.strip(), None
+    except FileNotFoundError:
+        return None, "osascript not available (not running on macOS)"
+    except subprocess.TimeoutExpired:
+        return None, "Mail request timed out"
+    except Exception as exc:  # noqa: BLE001 - fail gracefully
+        return None, str(exc)
+
+
+def get_unread_emails(limit: int = 5):
+    """Return up to ``limit`` unread messages as dicts of subject/sender/preview."""
+    # Records are emitted with field separators so we can parse them reliably.
+    script = f'''
+    set output to ""
+    set theCount to 0
+    tell application "Mail"
+        repeat with acct in accounts
+            try
+                set unreadMsgs to (messages of inbox whose read status is false)
+            on error
+                set unreadMsgs to {{}}
+            end try
+            repeat with msg in unreadMsgs
+                if theCount is greater than or equal to {int(limit)} then exit repeat
+                set theSubject to subject of msg
+                set theSender to sender of msg
+                set thePreview to (content of msg)
+                if (length of thePreview) > 160 then set thePreview to (text 1 thru 160 of thePreview)
+                set output to output & theSubject & "|::|" & theSender & "|::|" & thePreview & "|##|"
+                set theCount to theCount + 1
+            end repeat
+        end repeat
+    end tell
+    return output
+    '''
+    out, err = _run_applescript(script)
+    if err:
+        return [{"subject": "Mail unavailable", "sender": "system", "preview": err}]
+    if not out:
+        return []
+    emails = []
+    for record in out.split("|##|"):
+        record = record.strip()
+        if not record:
+            continue
+        parts = record.split("|::|")
+        if len(parts) >= 3:
+            emails.append(
+                {
+                    "subject": parts[0].strip(),
+                    "sender": parts[1].strip(),
+                    "preview": " ".join(parts[2].split()).strip(),
+                }
+            )
+    return emails
+
+
+def send_email(to: str, subject: str, body: str):
+    """Compose and send an email through Mail."""
+    safe_subject = subject.replace('"', "'")
+    safe_body = body.replace('"', "'")
+    script = f'''
+    tell application "Mail"
+        set newMsg to make new outgoing message with properties {{subject:"{safe_subject}", content:"{safe_body}", visible:false}}
+        tell newMsg
+            make new to recipient at end of to recipients with properties {{address:"{to}"}}
+            send
+        end tell
+    end tell
+    return "sent"
+    '''
+    out, err = _run_applescript(script)
+    if err:
+        return f"Could not send email: {err}"
+    return f"Email sent to {to}."
