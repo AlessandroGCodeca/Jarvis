@@ -14,11 +14,13 @@ export class UI {
   private micBtn!: HTMLButtonElement;
   private logPanel!: HTMLDivElement;
   private settingsPanel!: HTMLDivElement;
+  private wakeIndicator!: HTMLDivElement;
 
   private logEntries: { role: LogRole; text: string }[] = [];
 
   // Callbacks wired by main.ts.
   private micHandler: () => void = () => {};
+  private wakeToggleHandler: () => void = () => {};
 
   constructor() {
     this.buildStatus();
@@ -26,6 +28,7 @@ export class UI {
     this.buildLogButton();
     this.buildTranscript();
     this.buildMicButton();
+    this.buildWakeIndicator();
     this.buildLogPanel();
     this.buildSettingsPanel();
     this.bindKeys();
@@ -76,6 +79,19 @@ export class UI {
       </svg>`;
     this.micBtn.addEventListener("click", () => this.micHandler());
     document.body.appendChild(this.micBtn);
+  }
+
+  private buildWakeIndicator(): void {
+    this.wakeIndicator = document.createElement("div");
+    this.wakeIndicator.id = "wake-indicator";
+    this.wakeIndicator.setAttribute("role", "button");
+    this.wakeIndicator.title = "Toggle wake word";
+    this.wakeIndicator.innerHTML =
+      '<span class="dot"></span><span class="label">Wake word off</span>';
+    this.wakeIndicator.addEventListener("click", () =>
+      this.wakeToggleHandler()
+    );
+    document.body.appendChild(this.wakeIndicator);
   }
 
   private buildLogPanel(): void {
@@ -147,6 +163,21 @@ export class UI {
 
   setMicActive(active: boolean): void {
     this.micBtn.classList.toggle("listening", active);
+  }
+
+  onWakeToggle(handler: () => void): void {
+    this.wakeToggleHandler = handler;
+  }
+
+  setWakeStatus(active: boolean, supported: boolean): void {
+    this.wakeIndicator.classList.toggle("active", active && supported);
+    this.wakeIndicator.classList.toggle("unsupported", !supported);
+    const label = this.wakeIndicator.querySelector(".label");
+    if (label) {
+      if (!supported) label.textContent = "Wake word unavailable";
+      else if (active) label.textContent = "Listening for “Hey JARVIS”";
+      else label.textContent = "Wake word off";
+    }
   }
 
   setStatus(state: "connected" | "disconnected"): void {
