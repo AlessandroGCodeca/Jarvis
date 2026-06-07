@@ -2,6 +2,19 @@ import * as THREE from "three";
 
 export type OrbState = "idle" | "listening" | "thinking" | "speaking";
 
+export type Mood =
+  | "neutral"
+  | "happy"
+  | "positive"
+  | "thinking"
+  | "weather"
+  | "music"
+  | "email"
+  | "calendar"
+  | "error"
+  | "warning"
+  | "morning_briefing";
+
 interface StateParams {
   color: THREE.Color;
   expansion: number; // base radius multiplier
@@ -43,13 +56,32 @@ const STATE_PARAMS: Record<OrbState, StateParams> = {
   },
 };
 
+// Mood -> particle colour.
+const MOOD_COLORS: Record<Mood, number> = {
+  neutral: 0x00d4ff,
+  happy: 0xffd700,
+  positive: 0xffd700,
+  thinking: 0x7c3aed,
+  weather: 0x87ceeb,
+  music: 0x00ff88,
+  email: 0xff8c00,
+  calendar: 0xff8c00,
+  error: 0xff4444,
+  warning: 0xff4444,
+  morning_briefing: 0xffd700, // gold; blended with orange as a gradient
+};
+
+// Sunrise gradient endpoints for the morning briefing.
+const GRAD_TOP = new THREE.Color(0xffd700); // gold (top)
+const GRAD_BOTTOM = new THREE.Color(0xff8c00); // orange (bottom)
+
 /**
  * Audio-reactive particle orb rendered with Three.js.
  *
- * States (idle / listening / thinking / speaking) drive colour, expansion,
- * chaos and rotation; transitions are smoothed with lerp. During listening and
- * speaking, an AnalyserNode feeds frequency amplitude into particle
- * displacement.
+ * States (idle / listening / thinking / speaking) drive motion (colour too,
+ * when no mood is set). `setMood()` overrides the colour based on the mood of
+ * JARVIS's response and smoothly lerps to it over ~1s; "morning_briefing"
+ * renders a gold→orange sunrise gradient across the sphere.
  */
 export class OrbVisualizer {
   private renderer: THREE.WebGLRenderer;
@@ -62,11 +94,17 @@ export class OrbVisualizer {
   private basePositions: Float32Array; // unit-sphere fibonacci positions
   private randoms: Float32Array; // per-particle random phase
   private randoms2: Float32Array; // per-particle random amplitude weight
+  private colorArray: Float32Array; // per-particle RGB
 
   private state: OrbState = "idle";
-  // Live, lerped parameters.
+  private moodLock = false; // when set, mood colour overrides state colour
+  private targetColor = new THREE.Color(STATE_PARAMS.idle.color);
+  private curColor = new THREE.Color(STATE_PARAMS.idle.color);
+  private gradientAmount = 0; // 0 = uniform, 1 = full sunrise gradient
+  private targetGradientAmount = 0;
+
+  // Motion params, lerped toward the active state.
   private current = {
-    color: STATE_PARAMS.idle.color.clone(),
     expansion: STATE_PARAMS.idle.expansion,
     chaos: STATE_PARAMS.idle.chaos,
     rotationSpeed: STATE_PARAMS.idle.rotationSpeed,
@@ -103,6 +141,7 @@ export class OrbVisualizer {
     this.basePositions = new Float32Array(PARTICLE_COUNT * 3);
     this.randoms = new Float32Array(PARTICLE_COUNT);
     this.randoms2 = new Float32Array(PARTICLE_COUNT);
+    this.colorArray = new Float32Array(PARTICLE_COUNT * 3);
     const positions = new Float32Array(PARTICLE_COUNT * 3);
     const golden = Math.PI * (3 - Math.sqrt(5)); // golden angle
 
@@ -121,6 +160,10 @@ export class OrbVisualizer {
       positions[idx + 1] = y;
       positions[idx + 2] = z;
 
+      this.colorArray[idx] = this.curColor.r;
+      this.colorArray[idx + 1] = this.curColor.g;
+      this.colorArray[idx + 2] = this.curColor.b;
+
       this.randoms[i] = Math.random() * Math.PI * 2;
       this.randoms2[i] = 0.4 + Math.random() * 0.6;
     }
@@ -130,21 +173,25 @@ export class OrbVisualizer {
       "position",
       new THREE.BufferAttribute(positions, 3)
     );
+    this.geometry.setAttribute(
+      "color",
+      new THREE.BufferAttribute(this.colorArray, 3)
+    );
 
     this.material = new THREE.PointsMaterial({
-      color: this.current.color.clone(),
       size: 0.035,
       transparent: true,
       opacity: 0.9,
       blending: THREE.AdditiveBlending,
       depthWrite: false,
       sizeAttenuation: true,
+      vertexColors: true, // colour driven per-particle for gradient support
     });
 
     this.points = new THREE.Points(this.geometry, this.material);
     this.scene.add(this.points);
 
-    // Web Audio setup — created lazily-resumable on first user gesture.
+    // Web Audio setup — resumed on first user gesture.
     const Ctx =
       (window as any).AudioContext || (window as any).webkitAudioContext;
     this.audioCtx = new Ctx();
@@ -171,6 +218,29 @@ export class OrbVisualizer {
 
   setState(state: OrbState): void {
     this.state = state;
+    // When no mood is locked, colour follows the state.
+    if (!this.moodLock) {
+      this.targetColor.copy(STATE_PARAMS[state].color);
+    }
+  }
+
+  /** Set the orb colour from the mood of a response. Lerps over ~1s. */
+  setMood(mood: Mood): void {
+    if (mood === "neutral") {
+      this.moodLock = false;
+      this.targetGradientAmount = 0;
+      this.targetColor.copy(STATE_PARAMS[this.state].color);
+      return;
+    }
+    if (mood === "morning_briefing") {
+      this.moodLock = true;
+      this.targetGradientAmount = 1; // sunrise gradient
+      this.targetColor.setHex(MOOD_COLORS.morning_briefing);
+      return;
+    }
+    this.moodLock = true;
+    this.targetGradientAmount = 0;
+    this.targetColor.setHex(MOOD_COLORS[mood] ?? MOOD_COLORS.neutral);
   }
 
   /** Tap a microphone stream into the analyser for listening reactivity. */
@@ -209,7 +279,7 @@ export class OrbVisualizer {
     const target = STATE_PARAMS[this.state];
     const lerp = 0.06;
 
-    // Smoothly approach target parameters.
+    // Smoothly approach target motion params.
     this.current.expansion +=
       (target.expansion - this.current.expansion) * lerp;
     this.current.chaos += (target.chaos - this.current.chaos) * lerp;
@@ -217,8 +287,12 @@ export class OrbVisualizer {
       (target.rotationSpeed - this.current.rotationSpeed) * lerp;
     this.current.pulseSpeed +=
       (target.pulseSpeed - this.current.pulseSpeed) * lerp;
-    this.current.color.lerp(target.color, lerp);
-    this.material.color.copy(this.current.color);
+
+    // Colour transitions over ~1s (≈0.03/frame at 60fps).
+    const colorLerp = 0.03;
+    this.curColor.lerp(this.targetColor, colorLerp);
+    this.gradientAmount +=
+      (this.targetGradientAmount - this.gradientAmount) * colorLerp;
 
     // Read audio amplitude when it matters.
     if (this.state === "speaking" || this.state === "listening") {
@@ -235,9 +309,16 @@ export class OrbVisualizer {
     const pulse = 1 + Math.sin(t * this.current.pulseSpeed) * 0.03;
     const ampBoost = this.amplitude * (this.state === "speaking" ? 1.0 : 0.5);
 
+    const cr = this.curColor.r;
+    const cg = this.curColor.g;
+    const cb = this.curColor.b;
+    const ga = this.gradientAmount;
+
     const pos = this.geometry.attributes.position.array as Float32Array;
+    const col = this.colorArray;
     for (let i = 0; i < PARTICLE_COUNT; i++) {
       const idx = i * 3;
+      const baseY = this.basePositions[idx + 1];
       const phase = this.randoms[i];
       const noise = Math.sin(t * this.current.pulseSpeed * 1.7 + phase);
       const factor =
@@ -246,10 +327,27 @@ export class OrbVisualizer {
         ampBoost * this.randoms2[i] * 0.6;
 
       pos[idx] = this.basePositions[idx] * factor;
-      pos[idx + 1] = this.basePositions[idx + 1] * factor;
+      pos[idx + 1] = baseY * factor;
       pos[idx + 2] = this.basePositions[idx + 2] * factor;
+
+      // Per-particle colour: uniform curColor, optionally blended into a
+      // top(gold)→bottom(orange) sunrise gradient by gradientAmount.
+      if (ga > 0.001) {
+        const tY = (baseY + 1) * 0.5; // 0 bottom .. 1 top
+        const gr = GRAD_BOTTOM.r + (GRAD_TOP.r - GRAD_BOTTOM.r) * tY;
+        const gg = GRAD_BOTTOM.g + (GRAD_TOP.g - GRAD_BOTTOM.g) * tY;
+        const gb = GRAD_BOTTOM.b + (GRAD_TOP.b - GRAD_BOTTOM.b) * tY;
+        col[idx] = cr + (gr - cr) * ga;
+        col[idx + 1] = cg + (gg - cg) * ga;
+        col[idx + 2] = cb + (gb - cb) * ga;
+      } else {
+        col[idx] = cr;
+        col[idx + 1] = cg;
+        col[idx + 2] = cb;
+      }
     }
     this.geometry.attributes.position.needsUpdate = true;
+    this.geometry.attributes.color.needsUpdate = true;
 
     this.points.rotation.y += this.current.rotationSpeed;
     this.points.rotation.x += this.current.rotationSpeed * 0.3;

@@ -1,16 +1,16 @@
 /**
- * Speech-to-text via the Web Speech API, with always-on "Hey JARVIS" wake-word
- * detection.
+ * Speech-to-text via the Web Speech API, with "Hey JARVIS" wake-word detection
+ * and a follow-on "active session" mode.
  *
- * Two recognizers are used:
- *  - a background listener (continuous) that watches only for wake phrases, and
- *  - a foreground listener that captures the actual command after waking.
+ * Modes:
+ *  - WAKE: a background recognizer (continuous) listens only for wake phrases.
+ *  - SESSION: after waking, JARVIS keeps accepting commands automatically —
+ *    each response is followed by another listen, no wake word needed. The
+ *    session ends on a stop phrase ("goodbye", "go to sleep", ...), after 60s
+ *    of silence, or manually; control then returns to WAKE.
  *
- * They never run at the same time (they'd fight over the mic): waking stops the
- * background listener, runs the command listener, then the background listener
- * is resumed once the command + response cycle completes.
- *
- * Falls back to manual-button-only operation on unsupported browsers.
+ * The wake recognizer and the command recognizer never run together (they'd
+ * fight over the mic). Falls back to manual-button-only on unsupported browsers.
  */
 
 const WAKE_PHRASES = [
@@ -21,17 +21,33 @@ const WAKE_PHRASES = [
   "jarvis",
 ];
 
+const STOP_PHRASES = [
+  "goodbye",
+  "good bye",
+  "bye jarvis",
+  "go to sleep",
+  "stop listening",
+  "that's all",
+  "thats all",
+];
+
+const SESSION_SILENCE_MS = 60_000; // auto-sleep after 1 min with no commands
+
+export type VoiceStatus = "session" | "wake" | "off" | "unsupported";
+
 export class VoiceInput {
   private recognition: any | null = null; // foreground (command) recognizer
   private wakeRecognition: any | null = null; // background (wake-word) recognizer
   private supported = false;
 
   private listening = false; // command recognizer active
+  private sessionActive = false; // active-session mode (auto-listen between turns)
   private wakeEnabled = false; // user preference: wake word on/off
   private wakeRunning = false; // background recognizer actually running
   private waking = false; // transient: wake detected, switching to command
   private wakeErrored = false; // last background end was preceded by an error
   private restartTimer: number | null = null;
+  private silenceTimer: number | null = null;
 
   private beepCtx: AudioContext | null = null;
 
@@ -39,8 +55,8 @@ export class VoiceInput {
   private finalCb: (text: string) => void = () => {};
   private interimCb: (text: string) => void = () => {};
   private stateCb: (listening: boolean) => void = () => {};
-  private wakeCb: () => void = () => {};
-  private wakeStatusCb: (active: boolean) => void = () => {};
+  private statusCb: (status: VoiceStatus) => void = () => {};
+  private sleepCb: () => void = () => {};
 
   constructor() {
     const SR =
@@ -79,7 +95,16 @@ export class VoiceInput {
         else interim += transcript;
       }
       if (interim) this.interimCb(interim);
-      if (final.trim()) this.finalCb(final.trim());
+      if (final.trim()) {
+        const text = final.trim();
+        // In a session, a stop phrase puts JARVIS back to sleep (not sent on).
+        if (this.sessionActive && this._isStopPhrase(text)) {
+          this.endSession();
+          return;
+        }
+        if (this.sessionActive) this._startSilenceTimer(); // reset on command
+        this.finalCb(text);
+      }
     };
 
     recognition.onend = () => {
@@ -103,7 +128,7 @@ export class VoiceInput {
     r.lang = "en-US";
 
     r.onresult = (event: any) => {
-      if (this.waking || this.listening) return;
+      if (this.waking || this.listening || this.sessionActive) return;
       let transcript = "";
       for (let i = event.resultIndex; i < event.results.length; i++) {
         transcript += event.results[i][0].transcript;
@@ -123,16 +148,19 @@ export class VoiceInput {
       ) {
         this.wakeEnabled = false;
         this.wakeRunning = false;
-        this._emitWakeStatus();
+        this._emitStatus();
       }
     };
 
     // `end` always follows `error`, so do all restart scheduling here.
     r.onend = () => {
       this.wakeRunning = false;
-      if (this.wakeEnabled && !this.waking && !this.listening) {
-        // Auto-restart after an error (1s) keeps it always-on; a clean end
-        // (the browser stopping a "continuous" recognizer) restarts quickly.
+      if (
+        this.wakeEnabled &&
+        !this.waking &&
+        !this.listening &&
+        !this.sessionActive
+      ) {
         this._scheduleWakeRestart(this.wakeErrored ? 1000 : 300);
       }
       this.wakeErrored = false;
@@ -141,17 +169,20 @@ export class VoiceInput {
     this.wakeRecognition = r;
   }
 
-  // ---- Wake-word detection flow ----
+  // ---- Wake-word detection -> session ----
   private _onWakeDetected(): void {
-    if (this.waking || this.listening) return;
+    if (this.waking || this.listening || this.sessionActive) return;
     this.waking = true;
-    this._beep();
-    this.wakeCb(); // main.ts: orb -> listening, show "Listening..."
-    this.start(); // stop background listener + begin command capture
+    this.enterSession();
   }
 
-  /** Short 880Hz confirmation beep (~100ms) via a Web Audio oscillator. */
-  private _beep(): void {
+  private _isStopPhrase(text: string): boolean {
+    const lower = text.toLowerCase();
+    return STOP_PHRASES.some((p) => lower.includes(p));
+  }
+
+  /** Short confirmation tone (~100ms) via a Web Audio oscillator. */
+  private _beep(freq = 880): void {
     try {
       if (!this.beepCtx) {
         const Ctx =
@@ -163,7 +194,7 @@ export class VoiceInput {
       const osc = ctx.createOscillator();
       const gain = ctx.createGain();
       osc.type = "sine";
-      osc.frequency.value = 880;
+      osc.frequency.value = freq;
       const now = ctx.currentTime;
       gain.gain.setValueAtTime(0.0001, now);
       gain.gain.exponentialRampToValueAtTime(0.2, now + 0.01);
@@ -211,8 +242,24 @@ export class VoiceInput {
     }, ms);
   }
 
-  private _emitWakeStatus(): void {
-    this.wakeStatusCb(this.wakeEnabled && this.supported);
+  // ---- Silence (auto-sleep) timer ----
+  private _startSilenceTimer(): void {
+    this._clearSilenceTimer();
+    this.silenceTimer = window.setTimeout(() => {
+      this.silenceTimer = null;
+      if (this.sessionActive) this.endSession();
+    }, SESSION_SILENCE_MS);
+  }
+
+  private _clearSilenceTimer(): void {
+    if (this.silenceTimer !== null) {
+      clearTimeout(this.silenceTimer);
+      this.silenceTimer = null;
+    }
+  }
+
+  private _emitStatus(): void {
+    this.statusCb(this.currentStatus());
   }
 
   // ---- Public command API ----
@@ -220,7 +267,7 @@ export class VoiceInput {
     return this.supported;
   }
 
-  /** Start capturing a command (used by the mic button and by wake detection). */
+  /** Start capturing a single command (used internally and by `enterSession`). */
   start(): void {
     if (!this.recognition || this.listening) return;
     const wasWakeRunning = this.wakeRunning;
@@ -236,7 +283,8 @@ export class VoiceInput {
       } catch (err) {
         console.warn("Could not start recognition:", err);
         this.waking = false;
-        this.resumeWakeWord();
+        if (this.sessionActive) this.endSession();
+        else this.resumeWakeWord();
       }
     };
 
@@ -268,6 +316,53 @@ export class VoiceInput {
     this.stateCb = cb;
   }
 
+  // ---- Active-session API ----
+  isSessionActive(): boolean {
+    return this.sessionActive;
+  }
+
+  /** Enter active-session mode and begin listening for a command. */
+  enterSession(): void {
+    if (!this.supported || this.sessionActive) return;
+    this.sessionActive = true;
+    this._beep(880); // wake/confirm tone
+    this._emitStatus(); // -> "session" (cyan)
+    this.start(); // stop wake listener + begin command capture
+    this._startSilenceTimer();
+  }
+
+  /** Continue an active session: listen for the next command (small gap). */
+  continueListening(): void {
+    if (!this.sessionActive || this.listening) return;
+    window.setTimeout(() => {
+      if (this.sessionActive && !this.listening) this.start();
+    }, 300);
+  }
+
+  /** End the active session and return to wake-word sleep mode. */
+  endSession(): void {
+    const wasActive = this.sessionActive;
+    this.sessionActive = false;
+    this._clearSilenceTimer();
+    if (this.recognition && this.listening) {
+      try {
+        this.recognition.abort(); // onend will clear `listening` + emit state
+      } catch {
+        /* ignore */
+      }
+    }
+    if (wasActive) {
+      this._beep(440); // lower "going to sleep" tone
+      this.sleepCb();
+    }
+    this._emitStatus(); // -> "wake" or "off"
+    this.resumeWakeWord();
+  }
+
+  onSleep(cb: () => void): void {
+    this.sleepCb = cb;
+  }
+
   // ---- Public wake-word API ----
   isWakeWordSupported(): boolean {
     return this.supported;
@@ -277,19 +372,26 @@ export class VoiceInput {
     return this.wakeEnabled;
   }
 
+  currentStatus(): VoiceStatus {
+    if (!this.supported) return "unsupported";
+    if (this.sessionActive) return "session";
+    if (this.wakeEnabled) return "wake";
+    return "off";
+  }
+
   /** Enable + start the background wake listener. */
   startWakeWord(): void {
     if (!this.supported) return;
     this.wakeEnabled = true;
-    if (!this.listening) this._startWakeRec();
-    this._emitWakeStatus();
+    if (!this.listening && !this.sessionActive) this._startWakeRec();
+    this._emitStatus();
   }
 
   /** Disable + stop the background wake listener. */
   stopWakeWord(): void {
     this.wakeEnabled = false;
     this._stopWakeRec();
-    this._emitWakeStatus();
+    this._emitStatus();
   }
 
   /** Toggle wake word on/off; returns the new enabled state. */
@@ -302,19 +404,22 @@ export class VoiceInput {
 
   /**
    * Re-arm the background listener if it should be running. Safe to call
-   * repeatedly — no-ops while a command is being captured or wake word is off.
+   * repeatedly — no-ops during a command, an active session, or when off.
    */
   resumeWakeWord(): void {
-    if (!this.supported || !this.wakeEnabled || this.listening) return;
+    if (
+      !this.supported ||
+      !this.wakeEnabled ||
+      this.listening ||
+      this.sessionActive
+    ) {
+      return;
+    }
     this._startWakeRec();
-    this._emitWakeStatus();
+    this._emitStatus();
   }
 
-  onWake(cb: () => void): void {
-    this.wakeCb = cb;
-  }
-
-  onWakeStatusChange(cb: (active: boolean) => void): void {
-    this.wakeStatusCb = cb;
+  onStatusChange(cb: (status: VoiceStatus) => void): void {
+    this.statusCb = cb;
   }
 }

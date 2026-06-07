@@ -1,11 +1,31 @@
-import { OrbVisualizer } from "./orb";
+import { OrbVisualizer, type Mood } from "./orb";
 import { VoiceInput } from "./voice";
 import { WSClient } from "./websocket";
 import { UI } from "./ui";
 
+/** Infer a mood from JARVIS's response text to theme the orb's colour. */
+function detectMood(text: string): Mood {
+  const t = text.toLowerCase();
+  // Briefings mention weather + email keywords, so check them first.
+  if (/(good morning|briefing|summary)/.test(t)) return "morning_briefing";
+  if (/(playing|song|track|music|spotify)/.test(t)) return "music";
+  if (/(°|weather|temperature|rain|sunny|cloudy|forecast)/.test(t))
+    return "weather";
+  if (/(calendar|meeting|email|reminder|inbox|unread)/.test(t)) return "email";
+  if (/(error|sorry|can't|cannot|can not|unable|couldn't|could not)/.test(t))
+    return "error";
+  if (
+    /(great|happy|awesome|wonderful|glad|congrats?|excellent|good news|nice)/.test(
+      t
+    )
+  )
+    return "happy";
+  return "neutral";
+}
+
 /**
- * App entry point: instantiates the orb, voice input (with "Hey JARVIS" wake
- * word), WebSocket client, and UI, then wires the events that connect them.
+ * App entry point: instantiates the orb, voice input ("Hey JARVIS" wake word +
+ * active-session mode), WebSocket client, and UI, then wires them together.
  */
 function main(): void {
   const canvas = document.getElementById("orb-canvas") as HTMLCanvasElement;
@@ -17,56 +37,60 @@ function main(): void {
 
   ws.attachOrb(orb);
 
-  // True while we're waiting on a backend response — so we don't re-arm the
-  // wake listener until the command/response cycle is fully complete.
+  // True while we're waiting on a backend response, so we don't start the next
+  // listen (or re-arm wake word) until the command/response cycle completes.
   let pendingResponse = false;
+
+  // Resume listening appropriately once a turn finishes: keep going if we're in
+  // an active session, otherwise idle the orb and re-arm the wake word.
+  const afterTurn = () => {
+    if (voice.isSessionActive()) {
+      voice.continueListening();
+    } else {
+      orb.setState("idle");
+      voice.resumeWakeWord();
+    }
+  };
 
   // ---- Connection status ----
   ws.onStatus((connected) => {
     ui.setStatus(connected ? "connected" : "disconnected");
   });
 
-  // ---- Mic button (manual) toggles command listening ----
+  // ---- Mic button (manual): start/stop an active session ----
   ui.onMicToggle(() => {
     orb.resume(); // unlock AudioContext on user gesture
-    if (voice.isListening()) {
-      voice.stop();
+    if (voice.isSessionActive() || voice.isListening()) {
+      voice.endSession();
     } else {
       if (!voice.isSupported()) {
         ui.showTranscript("Speech recognition not supported in this browser.");
         return;
       }
-      voice.start(); // stops the wake listener + begins command capture
+      voice.enterSession();
     }
   });
 
-  // ---- Wake-word indicator toggles wake word on/off ----
+  // ---- Indicator click: end session, or toggle wake word ----
   ui.onWakeToggle(() => {
     orb.resume();
-    voice.toggleWakeWord();
+    if (voice.isSessionActive()) voice.endSession();
+    else voice.toggleWakeWord();
   });
 
-  voice.onWakeStatusChange((active) => {
-    ui.setWakeStatus(active, voice.isWakeWordSupported());
-  });
-
-  // ---- Wake word detected: immediate feedback (beep is played in voice) ----
-  voice.onWake(() => {
-    orb.resume();
-    orb.setState("listening");
-    ui.showTranscript("Listening...");
-  });
+  // ---- Voice status drives the indicator (session / wake / off / unsupported) ----
+  voice.onStatusChange((status) => ui.setVoiceStatus(status));
 
   // ---- Command listening state ----
   voice.onStateChange((listening) => {
     ui.setMicActive(listening);
     if (listening) {
       orb.setState("listening");
+      orb.setMood("neutral"); // reset colour theme for a new command
       ui.showTranscript("Listening...");
     } else if (!pendingResponse) {
-      // No command was sent (empty capture or manual stop) — settle and re-arm.
-      orb.setState("idle");
-      voice.resumeWakeWord();
+      // Capture ended with no command (or was stopped) — continue or sleep.
+      afterTurn();
     }
   });
 
@@ -82,9 +106,14 @@ function main(): void {
       ws.send(text); // flips orb into "thinking"
     } else {
       ui.showTranscript("Not connected to JARVIS backend.");
-      orb.setState("idle");
-      voice.resumeWakeWord();
+      afterTurn();
     }
+  });
+
+  // ---- Going to sleep (stop phrase / silence timeout / manual) ----
+  voice.onSleep(() => {
+    orb.setState("idle");
+    ui.showTranscript("Going to sleep 💤", false);
   });
 
   // ---- Responses from the backend ----
@@ -92,15 +121,17 @@ function main(): void {
     pendingResponse = false;
     ui.showTranscript(text, false);
     ui.addToLog("jarvis", text);
-    // Orb state is handled by the WS client (speaking → idle). Re-arm wake word.
-    voice.resumeWakeWord();
+    orb.setMood(detectMood(text)); // theme the orb to the response's mood
+    // Orb state is handled by the WS client (speaking → idle). Then continue
+    // the session (auto-listen) or re-arm the wake word.
+    afterTurn();
   });
 
   // ---- Start the always-on wake listener on load ----
   if (voice.isWakeWordSupported()) {
     voice.startWakeWord();
   }
-  ui.setWakeStatus(voice.isWakeWordEnabled(), voice.isWakeWordSupported());
+  ui.setVoiceStatus(voice.currentStatus());
 }
 
 window.addEventListener("DOMContentLoaded", main);
