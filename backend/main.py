@@ -62,12 +62,14 @@ async def websocket_endpoint(websocket: WebSocket):
                 # Run the (blocking) Claude tool loop off the event loop.
                 reply = await asyncio.to_thread(brain.process, content)
 
-                # Synthesize speech (returns None on fallback / failure).
-                audio = await tts_module.text_to_speech(reply)
+                # Send the text immediately so the UI reacts without waiting
+                # for speech synthesis.
+                await websocket.send_json({"type": "response", "text": reply})
 
-                await websocket.send_json(
-                    {"type": "response", "text": reply, "audio": audio}
-                )
+                # Synthesize speech (returns None on fallback / failure) and
+                # deliver it as a follow-up message.
+                audio = await tts_module.text_to_speech(reply)
+                await websocket.send_json({"type": "audio", "audio": audio})
                 continue
 
             # Unknown message type — ignore quietly.

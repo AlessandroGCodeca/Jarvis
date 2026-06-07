@@ -105,6 +105,10 @@ body {
 
 /* ---- Transcript (center, below orb) ---- */
 #transcript {
+  /* Voice-only: the spoken transcript and reply text are hidden so the screen
+     stays clean. The orb still reacts, and history is available via the log
+     ('L' key). Set this to a block/flex value to bring the text back. */
+  display: none;
   position: fixed;
   left: 50%;
   bottom: 160px;
