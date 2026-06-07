@@ -12,7 +12,7 @@ def _run_applescript(script: str):
             ["osascript", "-e", script],
             capture_output=True,
             text=True,
-            timeout=20,
+            timeout=35,
         )
         if result.returncode != 0:
             return None, (result.stderr or "AppleScript error").strip()
@@ -26,29 +26,37 @@ def _run_applescript(script: str):
 
 
 def get_unread_emails(limit: int = 5):
-    """Return up to ``limit`` unread messages as dicts of subject/sender/preview."""
+    """Return up to ``limit`` unread messages as dicts of subject/sender/preview.
+
+    For speed we scan only a bounded recent slice of the inbox (not the whole
+    mailbox with a ``whose`` filter) and read only header fields (subject and
+    sender) — fetching each message's body over IMAP is what made this slow.
+    The preview is therefore left empty.
+    """
     # Records are emitted with field separators so we can parse them reliably.
     script = f'''
     set output to ""
-    set theCount to 0
-    tell application "Mail"
-        repeat with acct in accounts
+    set foundCount to 0
+    with timeout of 30 seconds
+        tell application "Mail"
             try
-                set unreadMsgs to (messages of inbox whose read status is false)
+                set recentMsgs to messages 1 thru 60 of inbox
             on error
-                set unreadMsgs to {{}}
+                set recentMsgs to messages of inbox
             end try
-            repeat with msg in unreadMsgs
-                if theCount is greater than or equal to {int(limit)} then exit repeat
-                set theSubject to subject of msg
-                set theSender to sender of msg
-                set thePreview to (content of msg)
-                if (length of thePreview) > 160 then set thePreview to (text 1 thru 160 of thePreview)
-                set output to output & theSubject & "|::|" & theSender & "|::|" & thePreview & "|##|"
-                set theCount to theCount + 1
+            repeat with msg in recentMsgs
+                if foundCount is greater than or equal to {int(limit)} then exit repeat
+                if (read status of msg) is false then
+                    try
+                        set theSubject to subject of msg
+                        set theSender to sender of msg
+                        set output to output & theSubject & "|::|" & theSender & "|::|" & "|##|"
+                        set foundCount to foundCount + 1
+                    end try
+                end if
             end repeat
-        end repeat
-    end tell
+        end tell
+    end timeout
     return output
     '''
     out, err = _run_applescript(script)

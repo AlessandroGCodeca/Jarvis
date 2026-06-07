@@ -8,8 +8,16 @@ directly, so play() opens a Spotify search URI and starts playback (best-effort)
 The other controls (pause/resume/skip/volume/current) are exact.
 """
 
-import subprocess
+import base64
+import os
+import time
 from urllib.parse import quote
+
+import httpx
+import subprocess
+
+# Cached client-credentials token for the Spotify Web API search endpoint.
+_token_cache = {"token": None, "expires": 0.0}
 
 
 def _run_applescript(script: str):
@@ -32,17 +40,92 @@ def _run_applescript(script: str):
         return None, str(exc)
 
 
+def _get_access_token():
+    """Client-credentials token for the Spotify Web API, or None if unconfigured.
+
+    Requires SPOTIFY_CLIENT_ID / SPOTIFY_CLIENT_SECRET in the environment.
+    The token (valid ~1h) is cached to avoid re-fetching on every call.
+    """
+    client_id = os.getenv("SPOTIFY_CLIENT_ID")
+    client_secret = os.getenv("SPOTIFY_CLIENT_SECRET")
+    if not client_id or not client_secret:
+        return None
+
+    now = time.time()
+    if _token_cache["token"] and now < _token_cache["expires"] - 30:
+        return _token_cache["token"]
+
+    try:
+        auth = base64.b64encode(
+            f"{client_id}:{client_secret}".encode()
+        ).decode()
+        resp = httpx.post(
+            "https://accounts.spotify.com/api/token",
+            data={"grant_type": "client_credentials"},
+            headers={"Authorization": f"Basic {auth}"},
+            timeout=10,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        _token_cache["token"] = data["access_token"]
+        _token_cache["expires"] = now + data.get("expires_in", 3600)
+        return _token_cache["token"]
+    except Exception:  # noqa: BLE001 - treat as "no Web API available"
+        return None
+
+
+def _search_track(query: str):
+    """Resolve a query to (uri, "Song by Artist") via the Web API, or None."""
+    token = _get_access_token()
+    if not token:
+        return None
+    try:
+        resp = httpx.get(
+            "https://api.spotify.com/v1/search",
+            params={"q": query, "type": "track", "limit": 1},
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=10,
+        )
+        resp.raise_for_status()
+        items = resp.json().get("tracks", {}).get("items", [])
+        if not items:
+            return None
+        track = items[0]
+        artists = ", ".join(a["name"] for a in track.get("artists", []))
+        label = f"{track['name']} by {artists}" if artists else track["name"]
+        return track["uri"], label
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def play(query: str = ""):
-    """Search Spotify for ``query`` and start playback. Empty query resumes."""
+    """Search Spotify for ``query`` and start playback. Empty query resumes.
+
+    If SPOTIFY_CLIENT_ID/SECRET are configured, the exact track is resolved via
+    the Spotify Web API and played by URI (accurate). Otherwise it falls back to
+    opening a search URI in the app and starting playback (best-effort).
+    """
     if not query or not query.strip():
         return resume()
-    # AppleScript can't play arbitrary catalog results, so open the search URI
-    # in the app and then start playback.
-    uri = "spotify:search:" + quote(query.strip())
+    query = query.strip()
+
+    # Accurate path: resolve the exact track URI, then play it on the desktop app.
+    resolved = _search_track(query)
+    if resolved:
+        uri, label = resolved
+        out, err = _run_applescript(
+            f'tell application "Spotify" to play track "{uri}"'
+        )
+        if not err:
+            return f"Playing {label} on Spotify."
+        # If AppleScript playback failed, fall through to the best-effort path.
+
+    # Fallback: open the search URI in the app and start playback.
+    search_uri = "spotify:search:" + quote(query)
     script = f'''
     tell application "Spotify"
         activate
-        open location "{uri}"
+        open location "{search_uri}"
     end tell
     delay 2
     tell application "Spotify" to play

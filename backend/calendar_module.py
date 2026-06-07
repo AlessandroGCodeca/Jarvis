@@ -4,7 +4,23 @@ Every call is wrapped so a missing Calendar app, denied automation
 permission, or a non-macOS host degrades gracefully instead of raising.
 """
 
+import os
 import subprocess
+
+# Calendars to skip when reading events. These are the auto-generated /
+# subscribed calendars (holidays, birthdays, Siri Suggestions) that hold
+# hundreds of recurring all-day events — they're noise for a personal agenda
+# and what makes the date query slow. Matching is case/diacritical-insensitive
+# substring, so "svatky" also matches "České svátky". Override with the
+# CALENDAR_SKIP env var (comma-separated names; empty = show everything).
+DEFAULT_SKIP = ["birthday", "siri", "holiday", "sviatky", "svatky"]
+
+
+def _skip_patterns():
+    env = os.getenv("CALENDAR_SKIP")
+    if env is None:
+        return DEFAULT_SKIP
+    return [p.strip() for p in env.split(",") if p.strip()]
 
 
 def _run_applescript(script: str):
@@ -14,7 +30,7 @@ def _run_applescript(script: str):
             ["osascript", "-e", script],
             capture_output=True,
             text=True,
-            timeout=20,
+            timeout=35,
         )
         if result.returncode != 0:
             return None, (result.stderr or "AppleScript error").strip()
@@ -28,21 +44,47 @@ def _run_applescript(script: str):
 
 
 def _events_in_range(days_ahead: int):
-    """Return a list of event strings between now and ``days_ahead`` days out."""
+    """Return a list of event strings between now and ``days_ahead`` days out.
+
+    Every calendar is queried except those whose name matches the skip list
+    (holidays / birthdays / Siri Suggestions by default), so all of the user's
+    own events show up regardless of whether the calendar is writable, while
+    the slow auto-generated calendars are skipped for speed.
+    """
+    patterns = _skip_patterns()
+
+    def _esc(s: str) -> str:
+        return s.replace("\\", "\\\\").replace('"', '\\"')
+
+    # AppleScript list literal; empty list ({}) means "skip nothing".
+    skip_literal = ", ".join(f'"{_esc(p)}"' for p in patterns)
+
     script = f'''
+    set skipList to {{{skip_literal}}}
     set output to ""
     set startDate to current date
     set endDate to (current date) + ({days_ahead} * days)
-    tell application "Calendar"
-        repeat with cal in calendars
-            set theEvents to (every event of cal whose start date is greater than or equal to startDate and start date is less than or equal to endDate)
-            repeat with ev in theEvents
-                set evTitle to summary of ev
-                set evStart to start date of ev
-                set output to output & evTitle & " @ " & (evStart as string) & linefeed
+    with timeout of 30 seconds
+        tell application "Calendar"
+            repeat with cal in calendars
+                set cname to name of cal
+                set doSkip to false
+                repeat with pat in skipList
+                    ignoring case and diacriticals
+                        if cname contains pat then set doSkip to true
+                    end ignoring
+                end repeat
+                if doSkip is false then
+                    set theEvents to (every event of cal whose start date is greater than or equal to startDate and start date is less than or equal to endDate)
+                    repeat with ev in theEvents
+                        set evTitle to summary of ev
+                        set evStart to start date of ev
+                        set output to output & evTitle & " @ " & (evStart as string) & linefeed
+                    end repeat
+                end if
             end repeat
-        end repeat
-    end tell
+        end tell
+    end timeout
     return output
     '''
     out, err = _run_applescript(script)
