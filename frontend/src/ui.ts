@@ -6,6 +6,8 @@
  * localStorage. All elements are created dynamically and appended to <body>.
  */
 
+import type { VoiceStatus } from "./voice";
+
 type LogRole = "user" | "jarvis";
 
 export class UI {
@@ -169,14 +171,27 @@ export class UI {
     this.wakeToggleHandler = handler;
   }
 
-  setWakeStatus(active: boolean, supported: boolean): void {
-    this.wakeIndicator.classList.toggle("active", active && supported);
-    this.wakeIndicator.classList.toggle("unsupported", !supported);
-    const label = this.wakeIndicator.querySelector(".label");
+  setVoiceStatus(status: VoiceStatus): void {
+    const el = this.wakeIndicator;
+    el.classList.toggle("active", status === "wake");
+    el.classList.toggle("session", status === "session");
+    el.classList.toggle("unsupported", status === "unsupported");
+    const label = el.querySelector(".label");
     if (label) {
-      if (!supported) label.textContent = "Wake word unavailable";
-      else if (active) label.textContent = "Listening for “Hey JARVIS”";
-      else label.textContent = "Wake word off";
+      switch (status) {
+        case "session":
+          label.textContent = "Session active — say “Goodbye” to stop";
+          break;
+        case "wake":
+          label.textContent = "Listening for “Hey JARVIS”";
+          break;
+        case "off":
+          label.textContent = "Wake word off";
+          break;
+        case "unsupported":
+          label.textContent = "Wake word unavailable";
+          break;
+      }
     }
   }
 

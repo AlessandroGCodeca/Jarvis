@@ -330,9 +330,31 @@ body {
   animation: wake-pulse 1.8s ease-in-out infinite;
 }
 
+#wake-indicator.session {
+  color: var(--text);
+  border-color: rgba(0, 212, 255, 0.7);
+  background: rgba(0, 212, 255, 0.1);
+}
+
+#wake-indicator.session .dot {
+  background: var(--cyan);
+  box-shadow: 0 0 12px var(--cyan);
+  animation: wake-pulse-cyan 1.2s ease-in-out infinite;
+}
+
 #wake-indicator.unsupported {
   cursor: default;
   opacity: 0.6;
+}
+
+@keyframes wake-pulse-cyan {
+  0%,
+  100% {
+    box-shadow: 0 0 6px var(--cyan);
+  }
+  50% {
+    box-shadow: 0 0 16px var(--cyan);
+  }
 }
 
 @keyframes wake-pulse {
