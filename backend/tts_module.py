@@ -31,7 +31,7 @@ async def text_to_speech(text: str):
 
     api_key = os.getenv("ELEVENLABS_API_KEY")
     voice_id = os.getenv("ELEVENLABS_VOICE_ID")
-    model_id = os.getenv("ELEVENLABS_MODEL_ID", "eleven_multilingual_v2")
+    model_id = os.getenv("ELEVENLABS_MODEL_ID", "eleven_flash_v2_5")
     output_format = os.getenv("ELEVENLABS_OUTPUT_FORMAT", "mp3_44100_128")
 
     if not api_key or not voice_id:

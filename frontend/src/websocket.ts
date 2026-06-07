@@ -3,7 +3,6 @@ import type { OrbVisualizer } from "./orb";
 interface ResponseMessage {
   type: "response";
   text: string;
-  audio?: string | null;
 }
 
 /**
@@ -23,8 +22,8 @@ export class WSClient {
   private pingTimer: number | null = null;
 
   private orb: OrbVisualizer | null = null;
-  private responseCb: (msg: { text: string; audio?: string | null }) => void =
-    () => {};
+  private responseCb: (msg: { text: string }) => void = () => {};
+  private turnEndCb: () => void = () => {};
   private statusCb: (connected: boolean) => void = () => {};
 
   constructor(url = "ws://localhost:8000/ws") {
@@ -107,27 +106,35 @@ export class WSClient {
 
     if (data.type === "pong") return;
 
+    // Text arrives first (before TTS) so the UI can react immediately.
     if (data.type === "response") {
       const msg = data as ResponseMessage;
-      this.responseCb({ text: msg.text, audio: msg.audio });
+      this.responseCb({ text: msg.text });
+      return;
+    }
 
-      if (msg.audio && this.orb) {
+    // Audio arrives as a follow-up; playing it (or not) ends the turn.
+    if (data.type === "audio") {
+      const audio = data.audio as string | null | undefined;
+      if (audio && this.orb) {
         try {
-          await this.playBase64Audio(msg.audio);
+          await this.playBase64Audio(audio);
         } catch (err) {
           console.warn("Audio playback failed:", err);
           this.orb.setState("idle");
         }
       } else {
-        // No audio (TTS fell back to local `say` or failed) — return to idle.
+        // No audio (TTS fell back to local `say` or failed) — settle the orb.
         this.orb?.setState("idle");
       }
+      this.turnEndCb();
       return;
     }
 
     if (data.type === "error") {
       console.warn("Server error:", data.message);
       this.orb?.setState("idle");
+      this.turnEndCb();
     }
   }
 
@@ -153,8 +160,13 @@ export class WSClient {
     this.ws.send(JSON.stringify({ type: "message", content: text }));
   }
 
-  onResponse(cb: (msg: { text: string; audio?: string | null }) => void): void {
+  onResponse(cb: (msg: { text: string }) => void): void {
     this.responseCb = cb;
+  }
+
+  /** Fired when a turn fully completes (audio played, or none/error). */
+  onTurnEnd(cb: () => void): void {
+    this.turnEndCb = cb;
   }
 
   onStatus(cb: (connected: boolean) => void): void {

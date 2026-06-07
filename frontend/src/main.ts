@@ -141,12 +141,18 @@ function main(): void {
     ui.showTranscript("Going to sleep 💤", false);
   });
 
-  // ---- Responses from the backend ----
+  // ---- Text reply arrives first (before audio is synthesized) ----
   ws.onResponse(({ text }) => {
-    clearPending();
     ui.showTranscript(text, false);
     ui.addToLog("jarvis", text);
     orb.setMood(detectMood(text)); // theme the orb to the response's mood
+    // Keep the orb in its "thinking" state until audio plays; don't re-arm
+    // listening yet — the turn isn't complete until the audio message lands.
+  });
+
+  // ---- Audio (or error) marks the turn complete ----
+  ws.onTurnEnd(() => {
+    clearPending();
     // Orb state is handled by the WS client (speaking → idle). Then continue
     // the session (auto-listen) or re-arm the wake word.
     afterTurn();
