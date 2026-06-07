@@ -12,6 +12,9 @@ FORECAST_URL = "https://api.open-meteo.com/v1/forecast"
 
 DEFAULT_CITY = "Prague"
 
+# Some networks reject requests with a missing/default user agent.
+_HEADERS = {"User-Agent": "JARVIS/1.0 (voice assistant)"}
+
 # WMO weather interpretation codes -> human-readable conditions.
 WMO_CODES = {
     0: "clear sky",
@@ -50,6 +53,7 @@ def _geocode(city: str):
     resp = httpx.get(
         GEOCODE_URL,
         params={"name": city, "count": 1, "language": "en", "format": "json"},
+        headers=_HEADERS,
         timeout=10,
     )
     resp.raise_for_status()
@@ -86,6 +90,7 @@ def get_weather(city: str = DEFAULT_CITY) -> str:
                 "daily": "temperature_2m_max,temperature_2m_min",
                 "timezone": "auto",
             },
+            headers=_HEADERS,
             timeout=10,
         )
         resp.raise_for_status()
