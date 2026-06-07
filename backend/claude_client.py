@@ -14,10 +14,13 @@ from dotenv import load_dotenv
 
 import browser_module
 import calendar_module
+import briefing_module
 import mail_module
 import memory
 import notes_module
+import spotify_module
 import system_actions
+import weather_module
 
 load_dotenv()
 
@@ -98,6 +101,99 @@ TOOLS = [
                 }
             },
             "required": ["command"],
+        },
+    },
+    {
+        "name": "spotify_play",
+        "description": (
+            "Play music on Spotify. Pass a song, artist, album, or playlist "
+            "name to search and play it; pass nothing to resume playback."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "What to play (song/artist/album/playlist).",
+                }
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "spotify_playback",
+        "description": (
+            "Control Spotify playback or get the current track. Use 'current' "
+            "for 'what's playing'."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "enum": ["pause", "resume", "skip", "previous", "current"],
+                    "description": "The playback action to perform.",
+                }
+            },
+            "required": ["action"],
+        },
+    },
+    {
+        "name": "spotify_volume",
+        "description": (
+            "Set or adjust Spotify volume. Provide an absolute 'level' (0-100), "
+            "or a 'direction' ('up'/'down') to nudge it."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "level": {
+                    "type": "integer",
+                    "description": "Absolute volume, 0-100.",
+                },
+                "direction": {
+                    "type": "string",
+                    "enum": ["up", "down"],
+                    "description": "Relative volume change.",
+                },
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "get_weather",
+        "description": (
+            "Get the current weather and today's forecast for a city. "
+            "Defaults to Prague if no city is given."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "city": {
+                    "type": "string",
+                    "description": "City name (e.g. 'Prague', 'Tokyo').",
+                }
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "get_daily_briefing",
+        "description": (
+            "Get a daily/morning briefing that combines today's calendar, "
+            "unread emails, and the weather. Use this for 'morning briefing', "
+            "'daily briefing', 'good morning', or 'what's my day look like'. "
+            "Read the result back as one natural, flowing spoken summary."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "city": {
+                    "type": "string",
+                    "description": "City for the weather (default Prague).",
+                }
+            },
+            "required": [],
         },
     },
 ]
@@ -181,6 +277,36 @@ class JarvisBrain:
             if name == "run_command":
                 command = (tool_input or {}).get("command", "")
                 return system_actions.run_command(command)
+
+            if name == "spotify_play":
+                return spotify_module.play((tool_input or {}).get("query", ""))
+
+            if name == "spotify_playback":
+                action = (tool_input or {}).get("action", "current")
+                if action == "pause":
+                    return spotify_module.pause()
+                if action == "resume":
+                    return spotify_module.resume()
+                if action == "skip":
+                    return spotify_module.skip()
+                if action == "previous":
+                    return spotify_module.previous()
+                return spotify_module.get_current_track()
+
+            if name == "spotify_volume":
+                inp = tool_input or {}
+                direction = inp.get("direction")
+                if direction in ("up", "down"):
+                    return spotify_module.adjust_volume(direction)
+                return spotify_module.set_volume(inp.get("level", 50))
+
+            if name == "get_weather":
+                city = (tool_input or {}).get("city") or "Prague"
+                return weather_module.get_weather(city)
+
+            if name == "get_daily_briefing":
+                city = (tool_input or {}).get("city") or "Prague"
+                return briefing_module.get_daily_briefing(city)
 
             return f"Unknown tool: {name}"
         except Exception as exc:  # noqa: BLE001 - keep the loop alive

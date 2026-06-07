@@ -1,7 +1,27 @@
-import { OrbVisualizer } from "./orb";
+import { OrbVisualizer, type Mood } from "./orb";
 import { VoiceInput } from "./voice";
 import { WSClient } from "./websocket";
 import { UI } from "./ui";
+
+/** Infer a mood from JARVIS's response text to theme the orb's colour. */
+function detectMood(text: string): Mood {
+  const t = text.toLowerCase();
+  // Briefings mention weather + email keywords, so check them first.
+  if (/(good morning|briefing|summary)/.test(t)) return "morning_briefing";
+  if (/(playing|song|track|music|spotify)/.test(t)) return "music";
+  if (/(°|weather|temperature|rain|sunny|cloudy|forecast)/.test(t))
+    return "weather";
+  if (/(calendar|meeting|email|reminder|inbox|unread)/.test(t)) return "email";
+  if (/(error|sorry|can't|cannot|can not|unable|couldn't|could not)/.test(t))
+    return "error";
+  if (
+    /(great|happy|awesome|wonderful|glad|congrats?|excellent|good news|nice)/.test(
+      t
+    )
+  )
+    return "happy";
+  return "neutral";
+}
 
 /**
  * App entry point: instantiates the orb, voice input ("Hey JARVIS" wake word +
@@ -66,6 +86,7 @@ function main(): void {
     ui.setMicActive(listening);
     if (listening) {
       orb.setState("listening");
+      orb.setMood("neutral"); // reset colour theme for a new command
       ui.showTranscript("Listening...");
     } else if (!pendingResponse) {
       // Capture ended with no command (or was stopped) — continue or sleep.
@@ -100,6 +121,7 @@ function main(): void {
     pendingResponse = false;
     ui.showTranscript(text, false);
     ui.addToLog("jarvis", text);
+    orb.setMood(detectMood(text)); // theme the orb to the response's mood
     // Orb state is handled by the WS client (speaking → idle). Then continue
     // the session (auto-listen) or re-arm the wake word.
     afterTurn();
