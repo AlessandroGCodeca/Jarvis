@@ -38,8 +38,19 @@ function main(): void {
   ws.attachOrb(orb);
 
   // True while we're waiting on a backend response, so we don't start the next
-  // listen (or re-arm wake word) until the command/response cycle completes.
+  // listen (or re-arm wake word) until the command/response cycle completes —
+  // and so a duplicate "final" transcript doesn't get sent twice.
   let pendingResponse = false;
+  let responseTimer: number | null = null;
+
+  // Clear the pending-response state (and its safety watchdog).
+  const clearPending = () => {
+    pendingResponse = false;
+    if (responseTimer !== null) {
+      clearTimeout(responseTimer);
+      responseTimer = null;
+    }
+  };
 
   // Resume listening appropriately once a turn finishes: keep going if we're in
   // an active session, otherwise idle the orb and re-arm the wake word.
@@ -99,10 +110,24 @@ function main(): void {
   });
 
   voice.onResult((text) => {
+    // Ignore duplicate finals: Chrome's Web Speech API can report the final
+    // transcript more than once per utterance. Without this guard each one was
+    // sent to the backend, producing two replies and two overlapping voices.
+    if (pendingResponse) return;
+
     ui.showTranscript(text, false);
     ui.addToLog("user", text);
     if (ws.isConnected()) {
       pendingResponse = true;
+      // Safety watchdog: if no response arrives (e.g. backend error/disconnect),
+      // don't stay stuck — clear the flag and resume after 30s.
+      responseTimer = window.setTimeout(() => {
+        responseTimer = null;
+        if (pendingResponse) {
+          pendingResponse = false;
+          afterTurn();
+        }
+      }, 30000);
       ws.send(text); // flips orb into "thinking"
     } else {
       ui.showTranscript("Not connected to JARVIS backend.");
@@ -118,7 +143,7 @@ function main(): void {
 
   // ---- Responses from the backend ----
   ws.onResponse(({ text }) => {
-    pendingResponse = false;
+    clearPending();
     ui.showTranscript(text, false);
     ui.addToLog("jarvis", text);
     orb.setMood(detectMood(text)); // theme the orb to the response's mood
