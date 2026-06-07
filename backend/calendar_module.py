@@ -14,7 +14,7 @@ def _run_applescript(script: str):
             ["osascript", "-e", script],
             capture_output=True,
             text=True,
-            timeout=20,
+            timeout=35,
         )
         if result.returncode != 0:
             return None, (result.stderr or "AppleScript error").strip()
@@ -28,21 +28,31 @@ def _run_applescript(script: str):
 
 
 def _events_in_range(days_ahead: int):
-    """Return a list of event strings between now and ``days_ahead`` days out."""
+    """Return a list of event strings between now and ``days_ahead`` days out.
+
+    Only writable calendars are queried — read-only subscriptions (holidays,
+    Birthdays, Siri Suggestions) hold hundreds of recurring all-day events and
+    are what makes the ``whose`` date filter slow, so skipping them keeps the
+    query fast while still covering the user's own events.
+    """
     script = f'''
     set output to ""
     set startDate to current date
     set endDate to (current date) + ({days_ahead} * days)
-    tell application "Calendar"
-        repeat with cal in calendars
-            set theEvents to (every event of cal whose start date is greater than or equal to startDate and start date is less than or equal to endDate)
-            repeat with ev in theEvents
-                set evTitle to summary of ev
-                set evStart to start date of ev
-                set output to output & evTitle & " @ " & (evStart as string) & linefeed
+    with timeout of 30 seconds
+        tell application "Calendar"
+            repeat with cal in calendars
+                if writable of cal is true then
+                    set theEvents to (every event of cal whose start date is greater than or equal to startDate and start date is less than or equal to endDate)
+                    repeat with ev in theEvents
+                        set evTitle to summary of ev
+                        set evStart to start date of ev
+                        set output to output & evTitle & " @ " & (evStart as string) & linefeed
+                    end repeat
+                end if
             end repeat
-        end repeat
-    end tell
+        end tell
+    end timeout
     return output
     '''
     out, err = _run_applescript(script)
