@@ -165,6 +165,24 @@ body {
   animation: pulse 1.4s ease-in-out infinite;
 }
 
+/* JARVIS is speaking — clicking the mic interrupts it. */
+#mic-btn.speaking {
+  border-color: #00e5ff;
+  color: #00e5ff;
+  box-shadow: 0 0 38px rgba(0, 229, 255, 0.6);
+  animation: speak-pulse 1s ease-in-out infinite;
+}
+
+@keyframes speak-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 24px rgba(0, 229, 255, 0.4);
+  }
+  50% {
+    box-shadow: 0 0 44px rgba(0, 229, 255, 0.85);
+  }
+}
+
 #mic-btn svg {
   width: 30px;
   height: 30px;

@@ -6,6 +6,11 @@ All calls fail gracefully when Notes or automation permission is unavailable.
 import subprocess
 
 
+def _esc(s: str) -> str:
+    """Escape a string for safe interpolation into an AppleScript literal."""
+    return str(s).replace("\\", "\\\\").replace('"', '\\"')
+
+
 def _run_applescript(script: str):
     try:
         result = subprocess.run(
@@ -27,9 +32,10 @@ def _run_applescript(script: str):
 
 def create_note(title: str, body: str):
     """Create a note. The first line becomes the title in the Notes app."""
-    safe_title = title.replace('"', "'")
-    # Notes renders HTML; combine title + body into the note body.
-    safe_body = body.replace('"', "'").replace("\n", "<br>")
+    safe_title = _esc(title)
+    # Notes renders HTML; escape AppleScript quotes/backslashes first, then turn
+    # newlines into <br> for the HTML body.
+    safe_body = _esc(body).replace("\n", "<br>")
     script = f'''
     tell application "Notes"
         tell account 1
@@ -46,7 +52,7 @@ def create_note(title: str, body: str):
 
 def search_notes(query: str):
     """Return note titles whose name contains ``query``."""
-    safe_query = query.replace('"', "'")
+    safe_query = _esc(query)
     script = f'''
     set output to ""
     tell application "Notes"

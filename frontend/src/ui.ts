@@ -105,46 +105,21 @@ export class UI {
   private buildSettingsPanel(): void {
     this.settingsPanel = document.createElement("div");
     this.settingsPanel.id = "settings-panel";
+    // API keys are read by the backend from backend/.env — there's no point
+    // collecting them here, so this panel just explains where they live.
     this.settingsPanel.innerHTML = `
-      <h3>API Keys</h3>
-      <label for="set-anthropic">Anthropic API Key</label>
-      <input id="set-anthropic" type="password" placeholder="sk-ant-..." />
-      <label for="set-eleven">ElevenLabs API Key</label>
-      <input id="set-eleven" type="password" placeholder="..." />
-      <label for="set-voice">ElevenLabs Voice ID</label>
-      <input id="set-voice" type="text" placeholder="voice id" />
-      <button id="set-save">Save</button>
-      <p class="note">Stored locally in your browser. The backend reads its
-      keys from <code>backend/.env</code> — these are for reference/convenience.</p>
+      <h3>Settings</h3>
+      <p class="note">API keys are configured on the server in
+      <code>backend/.env</code>:</p>
+      <ul class="note">
+        <li><code>ANTHROPIC_API_KEY</code></li>
+        <li><code>ELEVENLABS_API_KEY</code> + <code>ELEVENLABS_VOICE_ID</code></li>
+      </ul>
+      <p class="note">Without ElevenLabs, JARVIS falls back to the macOS
+      <code>say</code> voice. Toggle the conversation log with the
+      <strong>L</strong> key.</p>
     `;
     document.body.appendChild(this.settingsPanel);
-
-    // Hydrate from localStorage.
-    (this.settingsPanel.querySelector("#set-anthropic") as HTMLInputElement).value =
-      localStorage.getItem("jarvis.anthropicKey") || "";
-    (this.settingsPanel.querySelector("#set-eleven") as HTMLInputElement).value =
-      localStorage.getItem("jarvis.elevenKey") || "";
-    (this.settingsPanel.querySelector("#set-voice") as HTMLInputElement).value =
-      localStorage.getItem("jarvis.voiceId") || "";
-
-    (this.settingsPanel.querySelector("#set-save") as HTMLButtonElement).addEventListener(
-      "click",
-      () => {
-        localStorage.setItem(
-          "jarvis.anthropicKey",
-          (this.settingsPanel.querySelector("#set-anthropic") as HTMLInputElement).value
-        );
-        localStorage.setItem(
-          "jarvis.elevenKey",
-          (this.settingsPanel.querySelector("#set-eleven") as HTMLInputElement).value
-        );
-        localStorage.setItem(
-          "jarvis.voiceId",
-          (this.settingsPanel.querySelector("#set-voice") as HTMLInputElement).value
-        );
-        this.toggleSettings();
-      }
-    );
   }
 
   private bindKeys(): void {
@@ -165,6 +140,16 @@ export class UI {
 
   setMicActive(active: boolean): void {
     this.micBtn.classList.toggle("listening", active);
+  }
+
+  /** Show that JARVIS is speaking and the mic button will interrupt it. */
+  setSpeaking(speaking: boolean): void {
+    this.micBtn.classList.toggle("speaking", speaking);
+    this.micBtn.setAttribute(
+      "aria-label",
+      speaking ? "Interrupt JARVIS" : "Toggle microphone"
+    );
+    this.micBtn.title = speaking ? "Click to interrupt JARVIS" : "";
   }
 
   onWakeToggle(handler: () => void): void {

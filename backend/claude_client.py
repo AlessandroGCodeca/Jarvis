@@ -89,8 +89,11 @@ TOOLS = [
     {
         "name": "run_command",
         "description": (
-            "Run a shell command on the user's Mac and return its output. "
-            "Has a 10 second timeout."
+            "Run a shell command on the user's Mac and return its output. Only "
+            "an allowlist of safe commands is permitted (open, ls, pwd, echo, "
+            "date, whoami, say); anything else is refused. Has a 10 second "
+            "timeout. Before calling this, state in your reply what you are "
+            "about to run and why."
         ),
         "input_schema": {
             "type": "object",
@@ -98,9 +101,17 @@ TOOLS = [
                 "command": {
                     "type": "string",
                     "description": "The shell command to execute.",
-                }
+                },
+                "explanation": {
+                    "type": "string",
+                    "description": (
+                        "A short, plain-language description of what this "
+                        "command does and why you are running it. Required as "
+                        "a confirmation step before any command runs."
+                    ),
+                },
             },
-            "required": ["command"],
+            "required": ["command", "explanation"],
         },
     },
     {
@@ -196,6 +207,108 @@ TOOLS = [
             "required": [],
         },
     },
+    {
+        "name": "recall_memory",
+        "description": (
+            "Search JARVIS's persistent memory of past conversations and notes "
+            "for anything relevant to a query. Use this when the user refers to "
+            "something from earlier or asks what they told you before."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "What to look for in memory.",
+                }
+            },
+            "required": ["query"],
+        },
+    },
+    {
+        "name": "get_recent_memories",
+        "description": (
+            "Get the most recent things JARVIS has stored in memory "
+            "(conversations and notes), newest first."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "limit": {
+                    "type": "integer",
+                    "description": "How many recent memories to fetch (default 5).",
+                }
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "create_event",
+        "description": (
+            "Create an event in the user's Calendar. Provide a clear date and "
+            "time, e.g. date 'June 10, 2026' and time '3:00 PM'."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "title": {"type": "string", "description": "Event title."},
+                "date": {
+                    "type": "string",
+                    "description": "Event date, e.g. 'June 10, 2026'.",
+                },
+                "time": {
+                    "type": "string",
+                    "description": "Start time, e.g. '3:00 PM'.",
+                },
+                "duration": {
+                    "type": "integer",
+                    "description": "Duration in minutes (default 60).",
+                },
+            },
+            "required": ["title", "date", "time"],
+        },
+    },
+    {
+        "name": "send_email",
+        "description": (
+            "Compose and send an email through the user's Mail app. Confirm the "
+            "recipient, subject, and body with the user before sending."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "to": {"type": "string", "description": "Recipient email address."},
+                "subject": {"type": "string", "description": "Email subject."},
+                "body": {"type": "string", "description": "Email body text."},
+            },
+            "required": ["to", "subject", "body"],
+        },
+    },
+    {
+        "name": "search_notes",
+        "description": "Search the user's Notes app for notes whose title matches a query.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "Text to search note titles for."}
+            },
+            "required": ["query"],
+        },
+    },
+    {
+        "name": "get_recent_notes",
+        "description": "Get the titles of the user's most recently modified notes.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "limit": {
+                    "type": "integer",
+                    "description": "How many recent notes to fetch (default 5).",
+                }
+            },
+            "required": [],
+        },
+    },
 ]
 
 
@@ -234,6 +347,29 @@ def _format_web(results) -> str:
     return "\n".join(lines)
 
 
+def _format_list(items, empty="Nothing found.") -> str:
+    """Format a list-of-strings tool result (notes, etc.), or pass through a str."""
+    if isinstance(items, str):
+        return items
+    if not items:
+        return empty
+    return "\n".join(f"- {i}" for i in items)
+
+
+def _format_memories(rows) -> str:
+    """Format memory rows (dicts with 'content') into a readable list."""
+    if isinstance(rows, str):
+        return rows
+    if not rows:
+        return "No matching memories."
+    lines = []
+    for r in rows:
+        content = (r.get("content") or "").strip().replace("\n", " ")
+        if content:
+            lines.append(f"- {content}")
+    return "\n".join(lines) if lines else "No matching memories."
+
+
 class JarvisBrain:
     """One conversational session with Claude (per WebSocket connection)."""
 
@@ -242,13 +378,37 @@ class JarvisBrain:
         self.client = anthropic.Anthropic()
         self.history = []
 
-    def _system_prompt(self) -> str:
+    def _system_prompt(self, memories: str = "") -> str:
         today = datetime.datetime.now().strftime("%A, %B %d, %Y")
-        return (
+        prompt = (
             "You are JARVIS, a voice assistant. Be concise (1-3 sentences "
-            "unless asked for more). You have tools: calendar, email, notes, "
-            f"web search, terminal. Current date: {today}"
+            "unless asked for more). You have access to: calendar, email, "
+            "notes, web search, terminal (restricted to a safe allowlist), "
+            "Spotify control, weather, daily briefing, and a persistent memory "
+            "you can search. Before running a terminal command, briefly say "
+            f"what you're about to do. Current date: {today}."
         )
+        if memories:
+            prompt += (
+                "\n\nRelevant memories from earlier (use only if helpful):\n"
+                + memories
+            )
+        return prompt
+
+    def _recall_block(self, query: str) -> str:
+        """Search memory for ``query`` and return the top 3 hits as text."""
+        try:
+            hits = memory.search_memory(query)
+        except Exception:  # noqa: BLE001 - memory is best-effort context
+            return ""
+        lines = []
+        for h in hits[:3]:
+            content = (h.get("content") or "").strip().replace("\n", " ")
+            if len(content) > 200:
+                content = content[:200] + "…"
+            if content:
+                lines.append(f"- {content}")
+        return "\n".join(lines)
 
     def _execute_tool(self, name: str, tool_input: dict) -> str:
         """Dispatch a tool call to the matching module. Always returns text."""
@@ -308,6 +468,43 @@ class JarvisBrain:
                 city = (tool_input or {}).get("city") or "Prague"
                 return briefing_module.get_daily_briefing(city)
 
+            if name == "recall_memory":
+                query = (tool_input or {}).get("query", "")
+                return _format_memories(memory.search_memory(query))
+
+            if name == "get_recent_memories":
+                limit = int((tool_input or {}).get("limit", 5))
+                return _format_memories(memory.get_recent(limit))
+
+            if name == "create_event":
+                inp = tool_input or {}
+                return calendar_module.create_event(
+                    inp.get("title", "Untitled"),
+                    inp.get("date", ""),
+                    inp.get("time", ""),
+                    int(inp.get("duration", 60)),
+                )
+
+            if name == "send_email":
+                inp = tool_input or {}
+                return mail_module.send_email(
+                    inp.get("to", ""),
+                    inp.get("subject", ""),
+                    inp.get("body", ""),
+                )
+
+            if name == "search_notes":
+                query = (tool_input or {}).get("query", "")
+                return _format_list(
+                    notes_module.search_notes(query), empty="No matching notes."
+                )
+
+            if name == "get_recent_notes":
+                limit = int((tool_input or {}).get("limit", 5))
+                return _format_list(
+                    notes_module.get_recent_notes(limit), empty="No notes found."
+                )
+
             return f"Unknown tool: {name}"
         except Exception as exc:  # noqa: BLE001 - keep the loop alive
             return f"Tool '{name}' failed: {exc}"
@@ -329,12 +526,16 @@ class JarvisBrain:
         """Run one turn (including any tool calls) and return the reply text."""
         self.history.append({"role": "user", "content": user_text})
 
+        # Pull any relevant past memories once and fold them into the system
+        # prompt for this turn so JARVIS can actually recall earlier context.
+        system = self._system_prompt(self._recall_block(user_text))
+
         # Bound the number of tool iterations to avoid runaway loops.
         for _ in range(8):
             response = self.client.messages.create(
                 model=MODEL,
                 max_tokens=1024,
-                system=self._system_prompt(),
+                system=system,
                 tools=TOOLS,
                 messages=self.history,
             )
