@@ -15,12 +15,16 @@ from dotenv import load_dotenv
 import browser_module
 import calendar_module
 import briefing_module
+import currency_module
 import mail_module
 import memory
+import news_module
 import notes_module
 import spotify_module
 import system_actions
+import translation_module
 import weather_module
+import wiki_module
 
 load_dotenv()
 
@@ -174,15 +178,19 @@ TOOLS = [
     {
         "name": "get_weather",
         "description": (
-            "Get the current weather and today's forecast for a city. "
-            "Defaults to Prague if no city is given."
+            "Get the current weather and today's forecast. If no city is "
+            "given, the user's location is auto-detected from their IP, so "
+            "you can call this with no arguments for 'what's the weather'."
         ),
         "input_schema": {
             "type": "object",
             "properties": {
                 "city": {
                     "type": "string",
-                    "description": "City name (e.g. 'Prague', 'Tokyo').",
+                    "description": (
+                        "Optional city name (e.g. 'Prague', 'Tokyo'). Omit to "
+                        "use the auto-detected location."
+                    ),
                 }
             },
             "required": [],
@@ -309,6 +317,221 @@ TOOLS = [
             "required": [],
         },
     },
+    {
+        "name": "get_news",
+        "description": (
+            "Get today's top news headlines. Use for 'news', 'headlines', "
+            "'what's happening', or 'what's going on in the world'. Optionally "
+            "pass a topic to focus the search. Read the result back naturally."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "topic": {
+                    "type": "string",
+                    "description": (
+                        "Optional topic to focus on (e.g. 'technology', "
+                        "'Czech politics'). Omit for general top stories."
+                    ),
+                }
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "search_wikipedia",
+        "description": (
+            "Look up a concise factual summary from Wikipedia. Use for "
+            "'what is', 'who is', or 'tell me about' questions where a full web "
+            "search would be overkill. Returns 2-3 sentences."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "The person, place, or thing to look up.",
+                }
+            },
+            "required": ["query"],
+        },
+    },
+    {
+        "name": "translate",
+        "description": (
+            "Translate text between English and Slovak, Italian, Czech, "
+            "French, Spanish, German, or Hungarian. Use for 'how do you say', "
+            "'translate', or 'in Slovak/Italian/...'. To translate something "
+            "INTO English, set source_language to the original language."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "text": {"type": "string", "description": "The text to translate."},
+                "target_language": {
+                    "type": "string",
+                    "description": "Language to translate into (e.g. 'Slovak').",
+                },
+                "source_language": {
+                    "type": "string",
+                    "description": (
+                        "Language the text is in (default 'English'). Set this "
+                        "when translating into English."
+                    ),
+                },
+            },
+            "required": ["text", "target_language"],
+        },
+    },
+    {
+        "name": "set_system_volume",
+        "description": (
+            "Control the Mac's system output volume. Provide 'level' (0-100) to "
+            "set it, 'direction' ('up'/'down') to nudge it by 10, or 'mute' "
+            "(true to mute, false to unmute). This is the whole computer's "
+            "volume, distinct from Spotify's."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "level": {
+                    "type": "integer",
+                    "description": "Absolute volume, 0-100.",
+                },
+                "direction": {
+                    "type": "string",
+                    "enum": ["up", "down"],
+                    "description": "Relative volume change (±10).",
+                },
+                "mute": {
+                    "type": "boolean",
+                    "description": "True to mute, false to unmute.",
+                },
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "set_brightness",
+        "description": (
+            "Control display brightness. Provide 'level' (0-100) for an exact "
+            "brightness, or 'direction' ('up'/'down') for 'brighter'/'dimmer'."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "level": {
+                    "type": "integer",
+                    "description": "Absolute brightness, 0-100.",
+                },
+                "direction": {
+                    "type": "string",
+                    "enum": ["up", "down"],
+                    "description": "Relative brightness change.",
+                },
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "enable_focus_mode",
+        "description": (
+            "Turn on Do Not Disturb / Focus mode. Optionally pass 'minutes' to "
+            "be reminded when the session ends. Use for 'focus mode', 'do not "
+            "disturb', or 'focus for X minutes'."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "minutes": {
+                    "type": "integer",
+                    "description": "Optional length of the focus session.",
+                }
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "disable_focus_mode",
+        "description": "Turn off Do Not Disturb / Focus mode.",
+        "input_schema": {"type": "object", "properties": {}, "required": []},
+    },
+    {
+        "name": "start_timer",
+        "description": (
+            "Start a timer. JARVIS will speak a notification when it's done. "
+            "Use for 'start a X minute timer' or 'timer'."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "minutes": {
+                    "type": "integer",
+                    "description": "How long the timer should run, in minutes.",
+                },
+                "label": {
+                    "type": "string",
+                    "description": "Optional name for the timer (e.g. 'tea').",
+                },
+            },
+            "required": ["minutes"],
+        },
+    },
+    {
+        "name": "pomodoro",
+        "description": (
+            "Start a pomodoro cycle: 25 minutes of focus then a 5-minute "
+            "break, with a spoken announcement at each phase."
+        ),
+        "input_schema": {"type": "object", "properties": {}, "required": []},
+    },
+    {
+        "name": "convert_currency",
+        "description": (
+            "Convert an amount between currencies (EUR, CZK, USD, GBP, HUF, "
+            "PLN, CHF). Accepts names like 'euros' or 'crowns'. Use for "
+            "'convert', 'how much is', or 'X in euros/crowns/dollars'."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "amount": {
+                    "type": "number",
+                    "description": "The amount to convert.",
+                },
+                "from_currency": {
+                    "type": "string",
+                    "description": "Currency to convert from (code or name).",
+                },
+                "to_currency": {
+                    "type": "string",
+                    "description": "Currency to convert to (code or name).",
+                },
+            },
+            "required": ["amount", "from_currency", "to_currency"],
+        },
+    },
+    {
+        "name": "get_exchange_rate",
+        "description": (
+            "Get the current exchange rate between two currencies, without an "
+            "amount. Use for 'what's the exchange rate'."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "from_currency": {
+                    "type": "string",
+                    "description": "Currency to convert from (code or name).",
+                },
+                "to_currency": {
+                    "type": "string",
+                    "description": "Currency to convert to (code or name).",
+                },
+            },
+            "required": ["from_currency", "to_currency"],
+        },
+    },
 ]
 
 
@@ -373,10 +596,14 @@ def _format_memories(rows) -> str:
 class JarvisBrain:
     """One conversational session with Claude (per WebSocket connection)."""
 
-    def __init__(self):
+    def __init__(self, notifier=None):
         # Reads ANTHROPIC_API_KEY from the environment.
         self.client = anthropic.Anthropic()
         self.history = []
+        # Optional callable (delay_seconds, text) used by timers / focus mode to
+        # schedule a spoken notification back to the client. Set by the server
+        # per WebSocket connection; None means timers can't fire.
+        self.notifier = notifier
 
     def _system_prompt(self, memories: str = "") -> str:
         today = datetime.datetime.now().strftime("%A, %B %d, %Y")
@@ -385,7 +612,12 @@ class JarvisBrain:
             "unless asked for more). You have access to: calendar, email, "
             "notes, web search, terminal (restricted to a safe allowlist), "
             "Spotify control, weather, daily briefing, and a persistent memory "
-            "you can search. Before running a terminal command, briefly say "
+            "you can search. You can also: get news headlines, look up "
+            "Wikipedia facts, translate languages (Slovak, Italian, Czech, "
+            "French, Spanish, German, Hungarian), control system volume and "
+            "brightness, start focus/Do Not Disturb mode and timers, "
+            "auto-detect the user's location for weather, and convert "
+            "currencies. Before running a terminal command, briefly say "
             f"what you're about to do. Current date: {today}."
         )
         if memories:
@@ -461,7 +693,8 @@ class JarvisBrain:
                 return spotify_module.set_volume(inp.get("level", 50))
 
             if name == "get_weather":
-                city = (tool_input or {}).get("city") or "Prague"
+                # None city -> auto-detect the user's location.
+                city = (tool_input or {}).get("city")
                 return weather_module.get_weather(city)
 
             if name == "get_daily_briefing":
@@ -503,6 +736,85 @@ class JarvisBrain:
                 limit = int((tool_input or {}).get("limit", 5))
                 return _format_list(
                     notes_module.get_recent_notes(limit), empty="No notes found."
+                )
+
+            if name == "get_news":
+                topic = (tool_input or {}).get("topic")
+                return news_module.get_news(topic)
+
+            if name == "search_wikipedia":
+                query = (tool_input or {}).get("query", "")
+                return wiki_module.search_wikipedia(query)
+
+            if name == "translate":
+                inp = tool_input or {}
+                return translation_module.translate(
+                    inp.get("text", ""),
+                    inp.get("target_language", ""),
+                    inp.get("source_language", "English"),
+                )
+
+            if name == "set_system_volume":
+                inp = tool_input or {}
+                if "mute" in inp and inp.get("mute") is not None:
+                    return (
+                        system_actions.mute()
+                        if inp.get("mute")
+                        else system_actions.unmute()
+                    )
+                direction = inp.get("direction")
+                if direction == "up":
+                    return system_actions.volume_up()
+                if direction == "down":
+                    return system_actions.volume_down()
+                if inp.get("level") is not None:
+                    return system_actions.set_volume(inp.get("level"))
+                return "Tell me a volume level, a direction, or to mute."
+
+            if name == "set_brightness":
+                inp = tool_input or {}
+                direction = inp.get("direction")
+                if direction == "up":
+                    return system_actions.brighter()
+                if direction == "down":
+                    return system_actions.dimmer()
+                if inp.get("level") is not None:
+                    return system_actions.set_brightness(inp.get("level"))
+                return "Tell me a brightness level or a direction."
+
+            if name == "enable_focus_mode":
+                minutes = (tool_input or {}).get("minutes")
+                return system_actions.enable_focus_mode(
+                    minutes, notifier=self.notifier
+                )
+
+            if name == "disable_focus_mode":
+                return system_actions.disable_focus_mode()
+
+            if name == "start_timer":
+                inp = tool_input or {}
+                return system_actions.start_timer(
+                    inp.get("minutes"),
+                    inp.get("label", "Focus session"),
+                    notifier=self.notifier,
+                )
+
+            if name == "pomodoro":
+                return system_actions.pomodoro(notifier=self.notifier)
+
+            if name == "convert_currency":
+                inp = tool_input or {}
+                return currency_module.convert_currency(
+                    inp.get("amount"),
+                    inp.get("from_currency", ""),
+                    inp.get("to_currency", ""),
+                )
+
+            if name == "get_exchange_rate":
+                inp = tool_input or {}
+                return currency_module.get_exchange_rate(
+                    inp.get("from_currency", ""),
+                    inp.get("to_currency", ""),
                 )
 
             return f"Unknown tool: {name}"
