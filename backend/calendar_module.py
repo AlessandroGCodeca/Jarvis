@@ -16,6 +16,11 @@ import subprocess
 DEFAULT_SKIP = ["birthday", "siri", "holiday", "sviatky", "svatky"]
 
 
+def _esc(s: str) -> str:
+    """Escape a string for safe interpolation into an AppleScript literal."""
+    return str(s).replace("\\", "\\\\").replace('"', '\\"')
+
+
 def _skip_patterns():
     env = os.getenv("CALENDAR_SKIP")
     if env is None:
@@ -52,9 +57,6 @@ def _events_in_range(days_ahead: int):
     the slow auto-generated calendars are skipped for speed.
     """
     patterns = _skip_patterns()
-
-    def _esc(s: str) -> str:
-        return s.replace("\\", "\\\\").replace('"', '\\"')
 
     # AppleScript list literal; empty list ({}) means "skip nothing".
     skip_literal = ", ".join(f'"{_esc(p)}"' for p in patterns)
@@ -112,12 +114,18 @@ def create_event(title: str, date: str, time: str, duration: int = 60):
     ``duration`` is in minutes.
     """
     when = f"{date} {time}".strip()
+    safe_when = _esc(when)
+    safe_title = _esc(title)
+    try:
+        minutes = int(duration)
+    except (TypeError, ValueError):
+        minutes = 60
     script = f'''
     tell application "Calendar"
-        set startDate to date "{when}"
-        set endDate to startDate + ({int(duration)} * minutes)
+        set startDate to date "{safe_when}"
+        set endDate to startDate + ({minutes} * minutes)
         tell calendar 1
-            make new event with properties {{summary:"{title}", start date:startDate, end date:endDate}}
+            make new event with properties {{summary:"{safe_title}", start date:startDate, end date:endDate}}
         end tell
     end tell
     return "created"

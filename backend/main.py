@@ -6,6 +6,7 @@ ElevenLabs, and returns text + base64 audio.
 """
 
 import asyncio
+from contextlib import asynccontextmanager
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
@@ -17,7 +18,16 @@ from claude_client import JarvisBrain
 
 load_dotenv()
 
-app = FastAPI(title="JARVIS")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup: ensure the memory store exists.
+    memory.init_db()
+    yield
+    # Shutdown: nothing to clean up.
+
+
+app = FastAPI(title="JARVIS", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -29,11 +39,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-
-@app.on_event("startup")
-def _startup() -> None:
-    memory.init_db()
 
 
 @app.get("/")
@@ -66,10 +71,22 @@ async def websocket_endpoint(websocket: WebSocket):
                 # for speech synthesis.
                 await websocket.send_json({"type": "response", "text": reply})
 
-                # Synthesize speech (returns None on fallback / failure) and
-                # deliver it as a follow-up message.
-                audio = await tts_module.text_to_speech(reply)
-                await websocket.send_json({"type": "audio", "audio": audio})
+                # Stream speech sentence-by-sentence so the first sentence can
+                # start playing while later ones are still being synthesized.
+                if tts_module.elevenlabs_configured():
+                    sentences = tts_module.split_sentences(reply) or [reply]
+                    for sentence in sentences:
+                        audio = await tts_module.synthesize_chunk(sentence)
+                        await websocket.send_json(
+                            {"type": "audio", "audio": audio}
+                        )
+                else:
+                    # No cloud TTS configured: speak the whole reply locally
+                    # via macOS `say` (returns None, no audio for the browser).
+                    await tts_module.text_to_speech(reply)
+
+                # Signal the end of this turn's audio stream.
+                await websocket.send_json({"type": "audio_end"})
                 continue
 
             # Unknown message type — ignore quietly.

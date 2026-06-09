@@ -13,13 +13,10 @@
  * fight over the mic). Falls back to manual-button-only on unsupported browsers.
  */
 
-const WAKE_PHRASES = [
-  "hey jarvis",
-  "hi jarvis",
-  "okay jarvis",
-  "ok jarvis",
-  "jarvis",
-];
+// Bare "jarvis" is intentionally excluded — it caused false wakes from any
+// sentence containing the word. The phrase must also appear at the START of
+// the transcript (see the wake recognizer below).
+const WAKE_PHRASES = ["hey jarvis", "hi jarvis", "okay jarvis", "ok jarvis"];
 
 const STOP_PHRASES = [
   "goodbye",
@@ -50,6 +47,12 @@ export class VoiceInput {
   private silenceTimer: number | null = null;
 
   private beepCtx: AudioContext | null = null;
+
+  // Lets the voice layer interrupt JARVIS's speech when the user barges in.
+  private playbackController: {
+    isPlaying: () => boolean;
+    stop: () => void;
+  } | null = null;
 
   // Callbacks (wired by main.ts).
   private finalCb: (text: string) => void = () => {};
@@ -133,8 +136,10 @@ export class VoiceInput {
       for (let i = event.resultIndex; i < event.results.length; i++) {
         transcript += event.results[i][0].transcript;
       }
-      const lower = transcript.toLowerCase();
-      if (WAKE_PHRASES.some((p) => lower.includes(p))) {
+      // Require the wake phrase at the very start of the utterance to avoid
+      // false triggers from "jarvis" appearing mid-sentence.
+      const lower = transcript.trim().toLowerCase();
+      if (WAKE_PHRASES.some((p) => lower.startsWith(p))) {
         this._onWakeDetected();
       }
     };
@@ -169,9 +174,21 @@ export class VoiceInput {
     this.wakeRecognition = r;
   }
 
+  /** Wire a controller so a wake-word can interrupt JARVIS mid-speech. */
+  setPlaybackController(controller: {
+    isPlaying: () => boolean;
+    stop: () => void;
+  }): void {
+    this.playbackController = controller;
+  }
+
   // ---- Wake-word detection -> session ----
   private _onWakeDetected(): void {
     if (this.waking || this.listening || this.sessionActive) return;
+    // Barge-in: if JARVIS is speaking, cut it off before we start listening.
+    if (this.playbackController?.isPlaying()) {
+      this.playbackController.stop();
+    }
     this.waking = true;
     this.enterSession();
   }

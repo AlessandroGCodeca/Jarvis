@@ -119,6 +119,15 @@ export class OrbVisualizer {
   private freqData: Uint8Array<ArrayBuffer>;
   private amplitude = 0; // smoothed 0..1
 
+  // ---- Playback queue (sentence-chunked TTS) ----
+  private audioQueue: AudioBuffer[] = [];
+  private currentSource: AudioBufferSourceNode | null = null;
+  private isPlayingQueue = false;
+  private streamEnded = false; // backend signalled all chunks for this turn
+  private notifiedSpeaking = false; // last value sent to speakingChangeCb
+  private playbackCompleteCb: () => void = () => {};
+  private speakingChangeCb: (speaking: boolean) => void = () => {};
+
   constructor(canvas: HTMLCanvasElement) {
     this.renderer = new THREE.WebGLRenderer({
       canvas,
@@ -253,18 +262,103 @@ export class OrbVisualizer {
     }
   }
 
-  /** Play a decoded buffer (TTS) through the analyser; orb reacts + returns to idle. */
-  playAudioBuffer(buffer: AudioBuffer): void {
+  /** Called once a turn's audio has fully finished playing (or none arrived). */
+  setPlaybackCompleteHandler(cb: () => void): void {
+    this.playbackCompleteCb = cb;
+  }
+
+  /** Notified when the orb starts (true) or stops (false) speaking. */
+  onSpeakingChange(cb: (speaking: boolean) => void): void {
+    this.speakingChangeCb = cb;
+  }
+
+  /** True while TTS audio is playing or queued. */
+  isSpeaking(): boolean {
+    return this.isPlayingQueue || this.audioQueue.length > 0;
+  }
+
+  /** Emit a speaking transition only when it actually changes. */
+  private _setSpeaking(speaking: boolean): void {
+    if (this.notifiedSpeaking === speaking) return;
+    this.notifiedSpeaking = speaking;
+    this.speakingChangeCb(speaking);
+  }
+
+  /** Queue a decoded TTS buffer; plays immediately if nothing else is playing. */
+  enqueueAudio(buffer: AudioBuffer): void {
     this.resume();
+    this.audioQueue.push(buffer);
+    this._playNext();
+  }
+
+  /** Backend signalled all audio chunks for this turn have been sent. */
+  markAudioStreamEnd(): void {
+    this.streamEnded = true;
+    if (!this.isPlayingQueue && this.audioQueue.length === 0) {
+      this._completePlayback();
+    }
+  }
+
+  /** Stop playback immediately and clear the queue (barge-in / interrupt). */
+  stopPlayback(): void {
+    this.audioQueue = [];
+    this.streamEnded = false;
+    if (this.currentSource) {
+      try {
+        this.currentSource.onended = null;
+        this.currentSource.stop();
+      } catch {
+        /* already stopped */
+      }
+      this.currentSource = null;
+    }
+    this.isPlayingQueue = false;
+    this.setState("idle");
+    this._setSpeaking(false);
+  }
+
+  /** Play the next queued buffer (TTS) through the analyser for reactivity. */
+  private _playNext(): void {
+    if (this.isPlayingQueue) return;
+    const buffer = this.audioQueue.shift();
+    if (!buffer) {
+      // Queue drained; if the backend is done sending, end the turn.
+      if (this.streamEnded) this._completePlayback();
+      return;
+    }
+
+    this.isPlayingQueue = true;
+    this.setState("speaking");
+    this._setSpeaking(true);
+
     const source = this.audioCtx.createBufferSource();
     source.buffer = buffer;
+    // Route to the speakers (to hear it) AND the analyser (for reactivity).
+    // The analyser is intentionally NOT connected to the destination, so a
+    // live mic tapped into it (connectAudio) never echoes back to the output.
+    source.connect(this.audioCtx.destination);
     source.connect(this.analyser);
-    this.analyser.connect(this.audioCtx.destination);
-    this.setState("speaking");
+    this.currentSource = source;
     source.onended = () => {
-      this.setState("idle");
+      if (this.currentSource === source) this.currentSource = null;
+      this.isPlayingQueue = false;
+      if (this.audioQueue.length > 0) {
+        this._playNext();
+      } else if (this.streamEnded) {
+        this._completePlayback();
+      }
+      // Otherwise: waiting for the next chunk to arrive.
     };
     source.start();
+  }
+
+  /** Settle the orb and notify that the turn's audio is fully done. */
+  private _completePlayback(): void {
+    this.streamEnded = false;
+    this.isPlayingQueue = false;
+    this.setState("idle");
+    this._setSpeaking(false);
+    this.playbackCompleteCb();
   }
 
   private onResize = (): void => {

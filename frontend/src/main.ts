@@ -3,19 +3,27 @@ import { VoiceInput } from "./voice";
 import { WSClient } from "./websocket";
 import { UI } from "./ui";
 
-/** Infer a mood from JARVIS's response text to theme the orb's colour. */
+/**
+ * Infer a mood from JARVIS's response text to theme the orb's colour.
+ *
+ * Matches use word boundaries / specific phrases to avoid false triggers
+ * (e.g. a generic "summary" no longer forces the sunrise gradient).
+ */
 function detectMood(text: string): Mood {
   const t = text.toLowerCase();
   // Briefings mention weather + email keywords, so check them first.
-  if (/(good morning|briefing|summary)/.test(t)) return "morning_briefing";
-  if (/(playing|song|track|music|spotify)/.test(t)) return "music";
-  if (/(°|weather|temperature|rain|sunny|cloudy|forecast)/.test(t))
+  if (/(good morning|morning briefing|daily briefing)/.test(t))
+    return "morning_briefing";
+  if (/\b(now playing|playing|spotify|playlist|album)\b/.test(t))
+    return "music";
+  if (/(°|\b(weather|temperature|forecast|humidity|sunny|cloudy|snow)\b)/.test(t))
     return "weather";
-  if (/(calendar|meeting|email|reminder|inbox|unread)/.test(t)) return "email";
-  if (/(error|sorry|can't|cannot|can not|unable|couldn't|could not)/.test(t))
+  if (/\b(calendar|meeting|meetings|email|emails|inbox|unread|reminder)\b/.test(t))
+    return "email";
+  if (/\b(error|sorry|unable|cannot|couldn't|could not|failed|can't)\b/.test(t))
     return "error";
   if (
-    /(great|happy|awesome|wonderful|glad|congrats?|excellent|good news|nice)/.test(
+    /\b(great|happy|awesome|wonderful|glad|congrats|congratulations|excellent|nice)\b/.test(
       t
     )
   )
@@ -63,6 +71,38 @@ function main(): void {
     }
   };
 
+  // ---- Mic reactivity: tap the microphone into the orb's analyser (once) so
+  // the orb reacts to the user's voice while listening, not just to TTS. ----
+  let micStream: MediaStream | null = null;
+  const ensureMicReactivity = (): void => {
+    if (micStream || !navigator.mediaDevices?.getUserMedia) return;
+    navigator.mediaDevices
+      .getUserMedia({ audio: true })
+      .then((stream) => {
+        micStream = stream;
+        orb.connectAudio(stream);
+      })
+      .catch((err) => console.warn("Mic reactivity unavailable:", err));
+  };
+
+  // ---- Barge-in: interrupt JARVIS's speech and take over. ----
+  const interruptIfSpeaking = (): void => {
+    if (orb.isSpeaking()) {
+      ws.stopPlayback(); // stop audio + discard the rest of this turn
+      clearPending(); // we're taking over; cancel the response watchdog
+    }
+  };
+  // Let a wake-word during playback interrupt JARVIS too.
+  voice.setPlaybackController({
+    isPlaying: () => orb.isSpeaking(),
+    stop: () => {
+      ws.stopPlayback();
+      clearPending();
+    },
+  });
+  // Show the "click to interrupt" affordance on the mic while JARVIS speaks.
+  orb.onSpeakingChange((speaking) => ui.setSpeaking(speaking));
+
   // ---- Connection status ----
   ws.onStatus((connected) => {
     ui.setStatus(connected ? "connected" : "disconnected");
@@ -71,13 +111,16 @@ function main(): void {
   // ---- Mic button (manual): start/stop an active session ----
   ui.onMicToggle(() => {
     orb.resume(); // unlock AudioContext on user gesture
+    ensureMicReactivity();
     if (voice.isSessionActive() || voice.isListening()) {
+      interruptIfSpeaking(); // also stop any audio when stopping
       voice.endSession();
     } else {
       if (!voice.isSupported()) {
         ui.showTranscript("Speech recognition not supported in this browser.");
         return;
       }
+      interruptIfSpeaking(); // barge-in: cut JARVIS off, then listen
       voice.enterSession();
     }
   });
@@ -85,8 +128,12 @@ function main(): void {
   // ---- Indicator click: end session, or toggle wake word ----
   ui.onWakeToggle(() => {
     orb.resume();
-    if (voice.isSessionActive()) voice.endSession();
-    else voice.toggleWakeWord();
+    if (voice.isSessionActive()) {
+      interruptIfSpeaking();
+      voice.endSession();
+    } else {
+      voice.toggleWakeWord();
+    }
   });
 
   // ---- Voice status drives the indicator (session / wake / off / unsupported) ----
@@ -96,6 +143,7 @@ function main(): void {
   voice.onStateChange((listening) => {
     ui.setMicActive(listening);
     if (listening) {
+      ensureMicReactivity(); // tap the mic into the orb on first listen
       orb.setState("listening");
       orb.setMood("neutral"); // reset colour theme for a new command
       ui.showTranscript("Listening...");
@@ -119,15 +167,18 @@ function main(): void {
     ui.addToLog("user", text);
     if (ws.isConnected()) {
       pendingResponse = true;
-      // Safety watchdog: if no response arrives (e.g. backend error/disconnect),
-      // don't stay stuck — clear the flag and resume after 30s.
+      // Safety watchdog: if a turn never completes (backend error/disconnect,
+      // or a missing end-of-audio signal), don't stay stuck. Generous so it
+      // never cuts off a legitimately long spoken reply; also discards any
+      // stale audio before resuming.
       responseTimer = window.setTimeout(() => {
         responseTimer = null;
         if (pendingResponse) {
           pendingResponse = false;
+          ws.stopPlayback();
           afterTurn();
         }
-      }, 30000);
+      }, 90000);
       ws.send(text); // flips orb into "thinking"
     } else {
       ui.showTranscript("Not connected to JARVIS backend.");
