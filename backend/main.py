@@ -49,51 +49,105 @@ def health():
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
-    brain = JarvisBrain()  # per-connection conversation history
-    try:
+
+    loop = asyncio.get_running_loop()
+    # Queue of pending spoken notifications (timer / pomodoro / focus alerts).
+    notif_queue: asyncio.Queue = asyncio.Queue()
+    # Live delayed-notification tasks, cancelled on disconnect.
+    timer_tasks: set = set()
+    # Serialize all sends so a notification can't interleave with a reply's
+    # audio stream (WebSocket sends are not safe to call concurrently).
+    send_lock = asyncio.Lock()
+
+    def schedule_notification(delay_seconds: float, text: str) -> None:
+        """Arm a spoken notification after ``delay_seconds``.
+
+        Thread-safe: the Claude tool loop runs in a worker thread, so timers are
+        armed onto the event loop via ``call_soon_threadsafe``.
+        """
+
+        def _arm() -> None:
+            async def _fire() -> None:
+                try:
+                    await asyncio.sleep(max(0.0, delay_seconds))
+                    await notif_queue.put(text)
+                except asyncio.CancelledError:
+                    pass
+
+            task = loop.create_task(_fire())
+            timer_tasks.add(task)
+            task.add_done_callback(timer_tasks.discard)
+
+        loop.call_soon_threadsafe(_arm)
+
+    brain = JarvisBrain(notifier=schedule_notification)
+
+    async def speak(text: str) -> None:
+        """Send text + streamed speech for one turn, serialized via send_lock."""
+        async with send_lock:
+            # Send the text immediately so the UI reacts without waiting for TTS.
+            await websocket.send_json({"type": "response", "text": text})
+
+            # Stream speech sentence-by-sentence so the first sentence can start
+            # playing while later ones are still being synthesized.
+            if tts_module.elevenlabs_configured():
+                sentences = tts_module.split_sentences(text) or [text]
+                for sentence in sentences:
+                    audio = await tts_module.synthesize_chunk(sentence)
+                    await websocket.send_json({"type": "audio", "audio": audio})
+            else:
+                # No cloud TTS configured: speak the whole reply locally via
+                # macOS `say` (returns None, no audio for the browser).
+                await tts_module.text_to_speech(text)
+
+            # Signal the end of this turn's audio stream.
+            await websocket.send_json({"type": "audio_end"})
+
+    async def receive_loop() -> None:
+        """Handle inbound messages until the socket closes."""
         while True:
             data = await websocket.receive_json()
             msg_type = data.get("type")
 
             if msg_type == "ping":
-                await websocket.send_json({"type": "pong"})
+                async with send_lock:
+                    await websocket.send_json({"type": "pong"})
                 continue
 
             if msg_type == "message":
                 content = (data.get("content") or "").strip()
                 if not content:
                     continue
-
                 # Run the (blocking) Claude tool loop off the event loop.
                 reply = await asyncio.to_thread(brain.process, content)
-
-                # Send the text immediately so the UI reacts without waiting
-                # for speech synthesis.
-                await websocket.send_json({"type": "response", "text": reply})
-
-                # Stream speech sentence-by-sentence so the first sentence can
-                # start playing while later ones are still being synthesized.
-                if tts_module.elevenlabs_configured():
-                    sentences = tts_module.split_sentences(reply) or [reply]
-                    for sentence in sentences:
-                        audio = await tts_module.synthesize_chunk(sentence)
-                        await websocket.send_json(
-                            {"type": "audio", "audio": audio}
-                        )
-                else:
-                    # No cloud TTS configured: speak the whole reply locally
-                    # via macOS `say` (returns None, no audio for the browser).
-                    await tts_module.text_to_speech(reply)
-
-                # Signal the end of this turn's audio stream.
-                await websocket.send_json({"type": "audio_end"})
+                await speak(reply)
                 continue
 
             # Unknown message type — ignore quietly.
+
+    async def notification_loop() -> None:
+        """Speak notifications (e.g. a finished timer) as they come due."""
+        while True:
+            text = await notif_queue.get()
+            try:
+                await speak(text)
+            except Exception:  # noqa: BLE001 - socket likely closing
+                return
+
+    notifier_task = asyncio.ensure_future(notification_loop())
+    try:
+        await receive_loop()
     except WebSocketDisconnect:
         return
     except Exception as exc:  # noqa: BLE001 - report and close cleanly
         try:
-            await websocket.send_json({"type": "error", "message": str(exc)})
+            async with send_lock:
+                await websocket.send_json(
+                    {"type": "error", "message": str(exc)}
+                )
         except Exception:  # noqa: BLE001
             pass
+    finally:
+        notifier_task.cancel()
+        for task in list(timer_tasks):
+            task.cancel()
