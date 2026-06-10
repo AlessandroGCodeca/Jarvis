@@ -1,8 +1,8 @@
 /**
  * DOM/UI layer for JARVIS — Iron Man HUD edition.
  *
- * Builds the mic button, the bottom-center HUD status bar, the conversation log
- * (toggle with "L"), and a settings panel. It also drives the live readouts in
+ * Builds the mic button, the bottom-center HUD status bar, and the conversation
+ * log (toggle with "L"). It also drives the live readouts in
  * the two side panels declared in index.html (status, uptime, session count,
  * detected language, TTS state, wake-word state) and the body-level activity
  * class that themes the HUD overlays.
@@ -27,7 +27,6 @@ export class UI {
   private transcriptEl!: HTMLDivElement;
   private micBtn!: HTMLButtonElement;
   private logPanel!: HTMLDivElement;
-  private settingsPanel!: HTMLDivElement;
 
   // Side-panel readout elements (declared in index.html).
   private plStatus: HTMLElement | null = null;
@@ -50,12 +49,10 @@ export class UI {
   constructor() {
     this.queryPanels();
     this.buildStatusBar();
-    this.buildSettingsButton();
     this.buildLogButton();
     this.buildTranscript();
     this.buildMicButton();
     this.buildLogPanel();
-    this.buildSettingsPanel();
     this.bindKeys();
     this.startUptime();
     this.setActivity("offline");
@@ -87,14 +84,6 @@ export class UI {
     this.statusBar
       .querySelector(".sb-wake")
       ?.addEventListener("click", () => this.wakeToggleHandler());
-  }
-
-  private buildSettingsButton(): void {
-    const btn = document.createElement("button");
-    btn.id = "settings-btn";
-    btn.textContent = "Settings";
-    btn.addEventListener("click", () => this.toggleSettings());
-    document.body.appendChild(btn);
   }
 
   private buildLogButton(): void {
@@ -133,28 +122,9 @@ export class UI {
     document.body.appendChild(this.logPanel);
   }
 
-  private buildSettingsPanel(): void {
-    this.settingsPanel = document.createElement("div");
-    this.settingsPanel.id = "settings-panel";
-    // API keys are read by the backend from backend/.env — there's no point
-    // collecting them here, so this panel just explains where they live.
-    this.settingsPanel.innerHTML = `
-      <h3>Settings</h3>
-      <p class="note">API keys are configured on the server in
-      <code>backend/.env</code>:</p>
-      <ul class="note">
-        <li><code>ANTHROPIC_API_KEY</code></li>
-        <li><code>ELEVENLABS_API_KEY</code> + <code>ELEVENLABS_VOICE_ID</code></li>
-      </ul>
-      <p class="note">Without ElevenLabs, JARVIS falls back to the macOS
-      <code>say</code> voice. Toggle the conversation log with the
-      <strong>L</strong> key.</p>
-    `;
-    document.body.appendChild(this.settingsPanel);
-  }
-
   private bindKeys(): void {
     window.addEventListener("keydown", (e) => {
+      // Ignore keypresses while typing in a field.
       const tag = (e.target as HTMLElement)?.tagName;
       if (tag === "INPUT" || tag === "TEXTAREA") return;
       if (e.key === "l" || e.key === "L") {
@@ -288,14 +258,6 @@ export class UI {
 
   private toggleLog(): void {
     this.logPanel.classList.toggle("open");
-  }
-
-  showSettings(): void {
-    this.settingsPanel.classList.add("open");
-  }
-
-  private toggleSettings(): void {
-    this.settingsPanel.classList.toggle("open");
   }
 }
 
