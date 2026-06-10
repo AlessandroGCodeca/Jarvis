@@ -4,12 +4,120 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>JARVIS</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@300;400;500;600&display=swap"
+      rel="stylesheet"
+    />
     <link rel="stylesheet" href="/style.css" />
   </head>
   <body>
+    <!-- Layer 2: drifting star field -->
+    <canvas id="starfield"></canvas>
+
+    <!-- Layer 3: subtle perspective grid -->
+    <div id="grid"></div>
+
+    <!-- Orb bloom / outer glow (sits behind the particle orb) -->
+    <div id="orb-glow"></div>
+
+    <!-- The Three.js particle orb -->
     <div id="app">
       <canvas id="orb-canvas"></canvas>
     </div>
+
+    <!-- Layer 4: vignette -->
+    <div id="vignette"></div>
+
+    <!-- Iron Man HUD overlays around the orb -->
+    <div id="hud" aria-hidden="true">
+      <!-- Ring 1 — inner dashed 270° arc with telemetry labels -->
+      <svg class="ring ring-1" viewBox="0 0 540 540">
+        <path
+          class="arc"
+          d="M142.72 397.28 A180 180 0 1 1 397.28 397.28"
+          fill="none"
+        />
+        <circle class="marker" cx="450" cy="270" r="3" />
+        <circle class="marker" cx="270" cy="450" r="3" />
+        <circle class="marker" cx="90" cy="270" r="3" />
+        <circle class="marker" cx="270" cy="90" r="3" />
+        <text class="tick" x="270" y="80" text-anchor="middle">SYS</text>
+        <text class="tick" x="468" y="274" text-anchor="start">NET</text>
+        <text class="tick" x="270" y="472" text-anchor="middle">MEM</text>
+        <text class="tick" x="72" y="274" text-anchor="end">CPU</text>
+      </svg>
+
+      <!-- Ring 2 — middle dashed bottom semicircle -->
+      <svg class="ring ring-2" viewBox="0 0 540 540">
+        <path class="arc" d="M490 270 A220 220 0 0 1 50 270" fill="none" />
+      </svg>
+
+      <!-- Ring 3 — faint outer circle with 8 notch marks -->
+      <svg class="ring ring-3" viewBox="0 0 540 540">
+        <circle class="halo" cx="270" cy="270" r="255" fill="none" />
+        <circle class="notches" cx="270" cy="270" r="255" fill="none" />
+      </svg>
+
+      <!-- Targeting-reticle corner brackets -->
+      <span class="bracket bracket-tl"></span>
+      <span class="bracket bracket-tr"></span>
+      <span class="bracket bracket-bl"></span>
+      <span class="bracket bracket-br"></span>
+
+      <!-- Scan line sweeping through the orb -->
+      <div class="scanline"></div>
+    </div>
+
+    <!-- Left tech readout: system status -->
+    <aside id="panel-left" class="hud-panel">
+      <div class="panel-title">JARVIS v2.0</div>
+      <div class="panel-rule"></div>
+      <div class="panel-row">
+        <span class="k">Status</span><span class="v" id="pl-status">Offline</span>
+      </div>
+      <div class="panel-row">
+        <span class="k">Uptime</span><span class="v" id="pl-uptime">00:00:00</span>
+      </div>
+      <div class="panel-row">
+        <span class="k">Session</span
+        ><span class="v" id="pl-session">0 Queries</span>
+      </div>
+      <div class="panel-row">
+        <span class="k">Memory</span
+        ><span class="v"><i class="led"></i>Active</span>
+      </div>
+      <div class="panel-row">
+        <span class="k">Voice</span><span class="v">EL Flash v2</span>
+      </div>
+      <div class="panel-row">
+        <span class="k">Model</span><span class="v">Haiku 4.5</span>
+      </div>
+    </aside>
+
+    <!-- Right tech readout: audio / signal -->
+    <aside id="panel-right" class="hud-panel">
+      <div class="panel-title">Signal Input</div>
+      <div class="panel-rule"></div>
+      <div class="visualizer" id="pr-visualizer">
+        <span></span><span></span><span></span><span></span><span></span
+        ><span></span><span></span><span></span>
+      </div>
+      <div class="panel-rule"></div>
+      <div class="panel-row">
+        <span class="k">Wake Word</span
+        ><span class="v" id="pr-wake">Disabled</span>
+      </div>
+      <div class="panel-rule"></div>
+      <div class="panel-row">
+        <span class="k">Lang</span><span class="v" id="pr-lang">EN</span>
+      </div>
+      <div class="panel-row">
+        <span class="k">TTS</span><span class="v" id="pr-tts">Idle</span>
+      </div>
+    </aside>
+
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

@@ -1,48 +1,92 @@
 /**
- * DOM/UI layer for JARVIS.
+ * DOM/UI layer for JARVIS — Iron Man HUD edition.
  *
- * Builds the mic button, status indicator, transcript line, conversation log
- * (toggle with the "L" key), and a settings panel that stores API keys in
- * localStorage. All elements are created dynamically and appended to <body>.
+ * Builds the mic button, the bottom-center HUD status bar, the conversation log
+ * (toggle with "L"), and a settings panel. It also drives the live readouts in
+ * the two side panels declared in index.html (status, uptime, session count,
+ * detected language, TTS state, wake-word state) and the body-level activity
+ * class that themes the HUD overlays.
  */
 
 import type { VoiceStatus } from "./voice";
 
 type LogRole = "user" | "jarvis";
+type Activity = "standby" | "listening" | "thinking" | "speaking" | "offline";
+
+const ACTIVITY_LABELS: Record<Activity, string> = {
+  standby: "Standby",
+  listening: "Listening",
+  thinking: "Processing",
+  speaking: "Responding",
+  offline: "Offline",
+};
 
 export class UI {
-  private statusEl!: HTMLDivElement;
+  private statusBar!: HTMLDivElement;
+  private stateLabel!: HTMLSpanElement;
   private transcriptEl!: HTMLDivElement;
   private micBtn!: HTMLButtonElement;
   private logPanel!: HTMLDivElement;
   private settingsPanel!: HTMLDivElement;
-  private wakeIndicator!: HTMLDivElement;
+
+  // Side-panel readout elements (declared in index.html).
+  private plStatus: HTMLElement | null = null;
+  private plUptime: HTMLElement | null = null;
+  private plSession: HTMLElement | null = null;
+  private prWake: HTMLElement | null = null;
+  private prLang: HTMLElement | null = null;
+  private prTts: HTMLElement | null = null;
 
   private logEntries: { role: LogRole; text: string }[] = [];
+  private activity: Activity = "offline";
+  private connected = false;
+  private sessionCount = 0;
+  private startTime = Date.now();
 
   // Callbacks wired by main.ts.
   private micHandler: () => void = () => {};
   private wakeToggleHandler: () => void = () => {};
 
   constructor() {
-    this.buildStatus();
+    this.queryPanels();
+    this.buildStatusBar();
     this.buildSettingsButton();
     this.buildLogButton();
     this.buildTranscript();
     this.buildMicButton();
-    this.buildWakeIndicator();
     this.buildLogPanel();
     this.buildSettingsPanel();
     this.bindKeys();
+    this.startUptime();
+    this.setActivity("offline");
   }
 
   // ---- Builders ----
-  private buildStatus(): void {
-    this.statusEl = document.createElement("div");
-    this.statusEl.id = "status";
-    this.statusEl.className = "disconnected";
-    this.statusEl.innerHTML = `<span class="dot"></span><span class="label">Disconnected</span>`;
-    document.body.appendChild(this.statusEl);
+  private queryPanels(): void {
+    this.plStatus = document.getElementById("pl-status");
+    this.plUptime = document.getElementById("pl-uptime");
+    this.plSession = document.getElementById("pl-session");
+    this.prWake = document.getElementById("pr-wake");
+    this.prLang = document.getElementById("pr-lang");
+    this.prTts = document.getElementById("pr-tts");
+  }
+
+  private buildStatusBar(): void {
+    this.statusBar = document.createElement("div");
+    this.statusBar.id = "status-bar";
+    this.statusBar.innerHTML = `
+      <span class="sb-brand">◈ JARVIS</span>
+      <span class="sb-divider"></span>
+      <span class="sb-state"><span class="sb-dot"></span><span class="sb-label">Offline</span></span>
+      <span class="sb-divider"></span>
+      <span class="sb-wake" role="button" title="Toggle wake word">Hey JARVIS 🎙</span>`;
+    document.body.appendChild(this.statusBar);
+    this.stateLabel = this.statusBar.querySelector(
+      ".sb-label"
+    ) as HTMLSpanElement;
+    this.statusBar
+      .querySelector(".sb-wake")
+      ?.addEventListener("click", () => this.wakeToggleHandler());
   }
 
   private buildSettingsButton(): void {
@@ -83,19 +127,6 @@ export class UI {
     document.body.appendChild(this.micBtn);
   }
 
-  private buildWakeIndicator(): void {
-    this.wakeIndicator = document.createElement("div");
-    this.wakeIndicator.id = "wake-indicator";
-    this.wakeIndicator.setAttribute("role", "button");
-    this.wakeIndicator.title = "Toggle wake word";
-    this.wakeIndicator.innerHTML =
-      '<span class="dot"></span><span class="label">Wake word off</span>';
-    this.wakeIndicator.addEventListener("click", () =>
-      this.wakeToggleHandler()
-    );
-    document.body.appendChild(this.wakeIndicator);
-  }
-
   private buildLogPanel(): void {
     this.logPanel = document.createElement("div");
     this.logPanel.id = "log-panel";
@@ -124,7 +155,6 @@ export class UI {
 
   private bindKeys(): void {
     window.addEventListener("keydown", (e) => {
-      // Ignore when typing in the settings inputs.
       const tag = (e.target as HTMLElement)?.tagName;
       if (tag === "INPUT" || tag === "TEXTAREA") return;
       if (e.key === "l" || e.key === "L") {
@@ -133,13 +163,59 @@ export class UI {
     });
   }
 
+  private startUptime(): void {
+    const tick = (): void => {
+      const s = Math.floor((Date.now() - this.startTime) / 1000);
+      const hh = String(Math.floor(s / 3600)).padStart(2, "0");
+      const mm = String(Math.floor((s % 3600) / 60)).padStart(2, "0");
+      const ss = String(s % 60).padStart(2, "0");
+      if (this.plUptime) this.plUptime.textContent = `${hh}:${mm}:${ss}`;
+    };
+    tick();
+    window.setInterval(tick, 1000);
+  }
+
   // ---- Public API ----
   onMicToggle(handler: () => void): void {
     this.micHandler = handler;
   }
 
+  onWakeToggle(handler: () => void): void {
+    this.wakeToggleHandler = handler;
+  }
+
+  /** Drive the HUD activity state (status bar, panels, overlay theming). */
+  setActivity(state: Activity): void {
+    // When disconnected, everything reads offline.
+    if (state !== "offline" && !this.connected) state = "offline";
+    this.activity = state;
+
+    for (const a of [
+      "standby",
+      "listening",
+      "thinking",
+      "speaking",
+      "offline",
+    ] as Activity[]) {
+      document.body.classList.toggle(`act-${a}`, a === state);
+    }
+
+    const label = ACTIVITY_LABELS[state];
+    if (this.stateLabel) this.stateLabel.textContent = label;
+    if (this.plStatus) this.plStatus.textContent = label;
+    if (this.prTts) {
+      this.prTts.textContent = state === "speaking" ? "Active" : "Idle";
+    }
+  }
+
   setMicActive(active: boolean): void {
     this.micBtn.classList.toggle("listening", active);
+    if (active) {
+      this.setActivity("listening");
+    } else if (this.activity === "listening") {
+      // Capture ended without moving on to thinking — settle to standby.
+      this.setActivity("standby");
+    }
   }
 
   /** Show that JARVIS is speaking and the mic button will interrupt it. */
@@ -150,41 +226,24 @@ export class UI {
       speaking ? "Interrupt JARVIS" : "Toggle microphone"
     );
     this.micBtn.title = speaking ? "Click to interrupt JARVIS" : "";
-  }
-
-  onWakeToggle(handler: () => void): void {
-    this.wakeToggleHandler = handler;
-  }
-
-  setVoiceStatus(status: VoiceStatus): void {
-    const el = this.wakeIndicator;
-    el.classList.toggle("active", status === "wake");
-    el.classList.toggle("session", status === "session");
-    el.classList.toggle("unsupported", status === "unsupported");
-    const label = el.querySelector(".label");
-    if (label) {
-      switch (status) {
-        case "session":
-          label.textContent = "Session active — say “Goodbye” to stop";
-          break;
-        case "wake":
-          label.textContent = "Listening for “Hey JARVIS”";
-          break;
-        case "off":
-          label.textContent = "Wake word off";
-          break;
-        case "unsupported":
-          label.textContent = "Wake word unavailable";
-          break;
-      }
+    if (speaking) {
+      this.setActivity("speaking");
+    } else if (this.activity === "speaking") {
+      this.setActivity("standby");
     }
   }
 
+  setVoiceStatus(status: VoiceStatus): void {
+    const armed = status === "wake" || status === "session";
+    if (this.prWake) this.prWake.textContent = armed ? "Armed" : "Disabled";
+  }
+
   setStatus(state: "connected" | "disconnected"): void {
-    this.statusEl.className = state;
-    const label = this.statusEl.querySelector(".label");
-    if (label) {
-      label.textContent = state === "connected" ? "Connected" : "Disconnected";
+    this.connected = state === "connected";
+    if (!this.connected) {
+      this.setActivity("offline");
+    } else if (this.activity === "offline") {
+      this.setActivity("standby");
     }
   }
 
@@ -200,11 +259,19 @@ export class UI {
 
   addToLog(role: LogRole, text: string): void {
     this.logEntries.push({ role, text });
-    // Keep the last 10 exchanges (20 entries).
     if (this.logEntries.length > 20) {
       this.logEntries = this.logEntries.slice(-20);
     }
     this.renderLog();
+
+    if (role === "user") {
+      this.sessionCount += 1;
+      if (this.plSession) {
+        const noun = this.sessionCount === 1 ? "Query" : "Queries";
+        this.plSession.textContent = `${this.sessionCount} ${noun}`;
+      }
+      if (this.prLang) this.prLang.textContent = detectLang(text);
+    }
   }
 
   private renderLog(): void {
@@ -230,6 +297,18 @@ export class UI {
   private toggleSettings(): void {
     this.settingsPanel.classList.toggle("open");
   }
+}
+
+/** Lightweight client-side language tag for the HUD readout (cosmetic). */
+function detectLang(text: string): "EN" | "SK" | "IT" | "CS" {
+  const t = text.toLowerCase();
+  if (/[řůě]/.test(t) || /\b(děkuji|díky|proč|nevím|dobře)\b/.test(t))
+    return "CS";
+  if (/[äľôťďĺŕ]/.test(t) || /\b(ahoj|ďakujem|prečo|prosím)\b/.test(t))
+    return "SK";
+  if (/[àèìòù]/.test(t) || /\b(ciao|grazie|perché|prego|quando)\b/.test(t))
+    return "IT";
+  return "EN";
 }
 
 function escapeHtml(s: string): string {

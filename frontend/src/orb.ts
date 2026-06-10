@@ -113,6 +113,10 @@ export class OrbVisualizer {
 
   private clock = new THREE.Clock();
 
+  // Idle "breathing": eased toward 1 when idle, 0 otherwise, scaling a slow
+  // 4-second sinusoid so the resting orb gently expands and contracts.
+  private breathingAmount = 1;
+
   // ---- Web Audio (shared context for playback + reactivity) ----
   private audioCtx: AudioContext;
   private analyser: AnalyserNode;
@@ -399,8 +403,14 @@ export class OrbVisualizer {
       this.amplitude += (0 - this.amplitude) * 0.1;
     }
 
+    // Ease the breathing amount toward 1 only when idle.
+    const breatheTarget = this.state === "idle" ? 1 : 0;
+    this.breathingAmount += (breatheTarget - this.breathingAmount) * lerp;
+
     const t = this.clock.getElapsedTime();
     const pulse = 1 + Math.sin(t * this.current.pulseSpeed) * 0.03;
+    // Slow 4s breath (period = 2π/1.5708), ±0.05 scale, idle only.
+    const breathe = Math.sin(t * 1.5708) * 0.05 * this.breathingAmount;
     const ampBoost = this.amplitude * (this.state === "speaking" ? 1.0 : 0.5);
 
     const cr = this.curColor.r;
@@ -416,7 +426,7 @@ export class OrbVisualizer {
       const phase = this.randoms[i];
       const noise = Math.sin(t * this.current.pulseSpeed * 1.7 + phase);
       const factor =
-        this.current.expansion * pulse +
+        (this.current.expansion + breathe) * pulse +
         noise * this.current.chaos +
         ampBoost * this.randoms2[i] * 0.6;
 
