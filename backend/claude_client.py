@@ -7,6 +7,7 @@ search, and terminal modules. Designed to be driven from an async server via
 """
 
 import datetime
+import json
 import os
 
 import anthropic
@@ -16,10 +17,13 @@ import browser_module
 import calendar_module
 import briefing_module
 import currency_module
+import files_module
+import language_module
 import mail_module
 import memory
 import news_module
 import notes_module
+import preferences_module
 import spotify_module
 import system_actions
 import translation_module
@@ -532,6 +536,170 @@ TOOLS = [
             "required": ["from_currency", "to_currency"],
         },
     },
+    {
+        "name": "open_app",
+        "description": (
+            "Open / launch a Mac application by name. Understands common names "
+            "like 'vscode', 'chrome', 'word'. Use for 'open', 'launch', 'start'."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "app_name": {
+                    "type": "string",
+                    "description": "The application to open (e.g. 'Spotify').",
+                }
+            },
+            "required": ["app_name"],
+        },
+    },
+    {
+        "name": "close_app",
+        "description": (
+            "Quit / close a Mac application by name. Use for 'close', 'quit'."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "app_name": {
+                    "type": "string",
+                    "description": "The application to close.",
+                }
+            },
+            "required": ["app_name"],
+        },
+    },
+    {
+        "name": "switch_to_app",
+        "description": (
+            "Bring a Mac application to the foreground. Use for 'switch to'."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "app_name": {
+                    "type": "string",
+                    "description": "The application to switch to.",
+                }
+            },
+            "required": ["app_name"],
+        },
+    },
+    {
+        "name": "list_running_apps",
+        "description": "List the user's currently open (foreground) apps.",
+        "input_schema": {"type": "object", "properties": {}, "required": []},
+    },
+    {
+        "name": "find_file",
+        "description": (
+            "Find files by name using macOS Spotlight. Optionally pass a "
+            "time_range (e.g. 7, 'last week') to limit to recently created "
+            "files. Use for 'find', 'where is', 'find my CV'."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Text to match in the file name.",
+                },
+                "time_range": {
+                    "type": "string",
+                    "description": (
+                        "Optional recency window, e.g. '7', 'week', "
+                        "'last week'."
+                    ),
+                },
+            },
+            "required": ["query"],
+        },
+    },
+    {
+        "name": "find_recent_files",
+        "description": (
+            "Find files created recently, optionally filtered by type "
+            "('documents', 'images', 'pdfs'). Use for 'find last week's "
+            "presentation' or 'recent downloads'."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "file_type": {
+                    "type": "string",
+                    "description": "Optional: 'documents', 'images', or 'pdfs'.",
+                },
+                "days": {
+                    "type": "integer",
+                    "description": "How many days back to look (default 7).",
+                },
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "find_by_content",
+        "description": (
+            "Search inside files (full-content Spotlight search) for a phrase. "
+            "Use when looking for a file by what it contains, not its name."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Text to search for inside files.",
+                }
+            },
+            "required": ["query"],
+        },
+    },
+    {
+        "name": "open_file",
+        "description": "Open a file in its default app, given its full path.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "description": "Full path of the file to open.",
+                }
+            },
+            "required": ["path"],
+        },
+    },
+    {
+        "name": "set_preference",
+        "description": (
+            "Remember a user preference across sessions. Call this when the "
+            "user states a preference, e.g. 'my name is Sandro' -> "
+            "set_preference('name', 'Sandro'); 'always give me weather in "
+            "Celsius' -> set_preference('weather_unit', 'celsius'); 'I prefer "
+            "Slovak' -> set_preference('language', 'sk'). Known keys: name, "
+            "language, weather_unit, weather_city, news_topics, volume_level, "
+            "wake_time, currency_from, currency_to. After saving, confirm "
+            "briefly (e.g. 'Got it, I'll remember that')."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "key": {"type": "string", "description": "Preference name."},
+                "value": {"type": "string", "description": "Preference value."},
+            },
+            "required": ["key", "value"],
+        },
+    },
+    {
+        "name": "get_preference",
+        "description": "Look up a stored user preference by key.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "key": {"type": "string", "description": "Preference name."}
+            },
+            "required": ["key"],
+        },
+    },
 ]
 
 
@@ -604,8 +772,20 @@ class JarvisBrain:
         # schedule a spoken notification back to the client. Set by the server
         # per WebSocket connection; None means timers can't fire.
         self.notifier = notifier
+        # Persistent user preferences (name, language, units, etc.).
+        self.preferences = preferences_module.get_all_preferences()
+        # Language handling. ``locked_language`` (when set) forces every reply
+        # into that language; otherwise the language is auto-detected per turn.
+        # A previously-stored non-English language preference acts as a lock so
+        # the choice survives across sessions. ``language`` is the effective
+        # code for the latest turn, read by the server for TTS.
+        pref_lang = language_module.normalize_language(
+            self.preferences.get("language")
+        )
+        self.locked_language = pref_lang if pref_lang and pref_lang != "en" else None
+        self.language = self.locked_language or "en"
 
-    def _system_prompt(self, memories: str = "") -> str:
+    def _system_prompt(self, memories: str = "", language_instruction: str = "") -> str:
         today = datetime.datetime.now().strftime("%A, %B %d, %Y")
         prompt = (
             "You are JARVIS, a voice assistant. Be concise (1-3 sentences "
@@ -616,10 +796,26 @@ class JarvisBrain:
             "Wikipedia facts, translate languages (Slovak, Italian, Czech, "
             "French, Spanish, German, Hungarian), control system volume and "
             "brightness, start focus/Do Not Disturb mode and timers, "
-            "auto-detect the user's location for weather, and convert "
-            "currencies. Before running a terminal command, briefly say "
-            f"what you're about to do. Current date: {today}."
+            "auto-detect the user's location for weather, convert currencies, "
+            "open/close/switch between apps, find files using Spotlight "
+            "search, respond in the user's language (Slovak, Italian, Czech, "
+            "English), and remember user preferences across sessions. Before "
+            f"running a terminal command, briefly say what you're about to do. "
+            f"Current date: {today}."
         )
+
+        prefs_json = json.dumps(self.preferences, ensure_ascii=False)
+        prompt += (
+            f"\n\nUser preferences (JSON): {prefs_json}. Always use these as "
+            "defaults unless the user specifies otherwise. If you learn a new "
+            "preference from the conversation (their name, preferred language, "
+            "default city, units, etc.), call set_preference to remember it, "
+            "then confirm briefly."
+        )
+
+        if language_instruction:
+            prompt += "\n\n" + language_instruction
+
         if memories:
             prompt += (
                 "\n\nRelevant memories from earlier (use only if helpful):\n"
@@ -817,6 +1013,64 @@ class JarvisBrain:
                     inp.get("to_currency", ""),
                 )
 
+            if name == "open_app":
+                return system_actions.open_app(
+                    (tool_input or {}).get("app_name", "")
+                )
+
+            if name == "close_app":
+                return system_actions.close_app(
+                    (tool_input or {}).get("app_name", "")
+                )
+
+            if name == "switch_to_app":
+                return system_actions.switch_to_app(
+                    (tool_input or {}).get("app_name", "")
+                )
+
+            if name == "list_running_apps":
+                return system_actions.list_running_apps()
+
+            if name == "find_file":
+                inp = tool_input or {}
+                return files_module.find_file(
+                    inp.get("query", ""), inp.get("time_range")
+                )
+
+            if name == "find_recent_files":
+                inp = tool_input or {}
+                return files_module.find_recent_files(
+                    inp.get("file_type"), inp.get("days", 7)
+                )
+
+            if name == "find_by_content":
+                return files_module.find_by_content(
+                    (tool_input or {}).get("query", "")
+                )
+
+            if name == "open_file":
+                return files_module.open_file((tool_input or {}).get("path", ""))
+
+            if name == "set_preference":
+                inp = tool_input or {}
+                key = inp.get("key", "")
+                value = inp.get("value")
+                # Setting the language preference also locks the session so the
+                # choice persists and overrides per-turn auto-detection.
+                if key == "language":
+                    code = language_module.normalize_language(value) or value
+                    value = code
+                    self.locked_language = code
+                    self.language = code
+                return preferences_module.set_preference(key, value)
+
+            if name == "get_preference":
+                key = (tool_input or {}).get("key", "")
+                val = preferences_module.get_preference(key)
+                if val is None:
+                    return f"No preference is set for '{key}'."
+                return f"{key}: {val}"
+
             return f"Unknown tool: {name}"
         except Exception as exc:  # noqa: BLE001 - keep the loop alive
             return f"Tool '{name}' failed: {exc}"
@@ -838,9 +1092,29 @@ class JarvisBrain:
         """Run one turn (including any tool calls) and return the reply text."""
         self.history.append({"role": "user", "content": user_text})
 
+        # Refresh preferences each turn so a mid-session set_preference is
+        # reflected in the prompt going forward.
+        self.preferences = preferences_module.get_all_preferences()
+
+        # Determine the language for this turn: a locked language (explicit
+        # request or stored preference) wins; otherwise auto-detect from the
+        # message. Store it so the server can pass the right TTS language code.
+        detected = language_module.detect_language(user_text)
+        effective = self.locked_language or detected
+        self.language = effective
+        language_instruction = ""
+        if effective != "en" or self.locked_language:
+            lang_name = language_module.LANGUAGE_NAMES.get(effective, "English")
+            language_instruction = (
+                f"The user is speaking in {lang_name}. Respond entirely in "
+                f"{lang_name}. Do not switch to English unless explicitly asked."
+            )
+
         # Pull any relevant past memories once and fold them into the system
         # prompt for this turn so JARVIS can actually recall earlier context.
-        system = self._system_prompt(self._recall_block(user_text))
+        system = self._system_prompt(
+            self._recall_block(user_text), language_instruction
+        )
 
         # Bound the number of tool iterations to avoid runaway loops.
         for _ in range(8):

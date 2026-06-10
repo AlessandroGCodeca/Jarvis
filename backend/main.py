@@ -82,7 +82,7 @@ async def websocket_endpoint(websocket: WebSocket):
 
     brain = JarvisBrain(notifier=schedule_notification)
 
-    async def speak(text: str) -> None:
+    async def speak(text: str, language_code: str = None) -> None:
         """Send text + streamed speech for one turn, serialized via send_lock."""
         async with send_lock:
             # Send the text immediately so the UI reacts without waiting for TTS.
@@ -93,12 +93,14 @@ async def websocket_endpoint(websocket: WebSocket):
             if tts_module.elevenlabs_configured():
                 sentences = tts_module.split_sentences(text) or [text]
                 for sentence in sentences:
-                    audio = await tts_module.synthesize_chunk(sentence)
+                    audio = await tts_module.synthesize_chunk(
+                        sentence, language_code
+                    )
                     await websocket.send_json({"type": "audio", "audio": audio})
             else:
                 # No cloud TTS configured: speak the whole reply locally via
                 # macOS `say` (returns None, no audio for the browser).
-                await tts_module.text_to_speech(text)
+                await tts_module.text_to_speech(text, language_code)
 
             # Signal the end of this turn's audio stream.
             await websocket.send_json({"type": "audio_end"})
@@ -120,7 +122,8 @@ async def websocket_endpoint(websocket: WebSocket):
                     continue
                 # Run the (blocking) Claude tool loop off the event loop.
                 reply = await asyncio.to_thread(brain.process, content)
-                await speak(reply)
+                # Speak the reply in the language JARVIS detected for this turn.
+                await speak(reply, getattr(brain, "language", None))
                 continue
 
             # Unknown message type — ignore quietly.

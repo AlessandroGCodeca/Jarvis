@@ -21,6 +21,9 @@ dist/
 *.sqlite3
 jarvis_memory.db
 
+# ---- JARVIS user preferences (local; may contain personal info) ----
+backend/user_preferences.json
+
 # ---- OS / editor ----
 .DS_Store
 Thumbs.db

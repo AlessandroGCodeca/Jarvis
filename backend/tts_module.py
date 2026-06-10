@@ -55,8 +55,12 @@ def _say_fallback(text: str) -> None:
         pass
 
 
-async def _synth_elevenlabs(text: str):
-    """Synthesize ``text`` via ElevenLabs → raw MP3 bytes, or None on failure."""
+async def _synth_elevenlabs(text: str, language_code: str = None):
+    """Synthesize ``text`` via ElevenLabs → raw MP3 bytes, or None on failure.
+
+    ``language_code`` (e.g. 'sk', 'it', 'cs', 'en') is forwarded to the
+    multilingual flash model so non-English replies are pronounced correctly.
+    """
     api_key = os.getenv("ELEVENLABS_API_KEY")
     voice_id = os.getenv("ELEVENLABS_VOICE_ID")
     model_id = os.getenv("ELEVENLABS_MODEL_ID", "eleven_flash_v2_5")
@@ -76,6 +80,8 @@ async def _synth_elevenlabs(text: str):
         "model_id": model_id,
         "voice_settings": {"stability": 0.5, "similarity_boost": 0.75},
     }
+    if language_code:
+        payload["language_code"] = language_code
     params = {"output_format": output_format}
 
     try:
@@ -93,7 +99,7 @@ async def _synth_elevenlabs(text: str):
         return None
 
 
-async def synthesize_chunk(text: str):
+async def synthesize_chunk(text: str, language_code: str = None):
     """Synthesize one sentence → base64 MP3, or None if it can't be synthesized.
 
     No local fallback here: chunked playback is only used when ElevenLabs is
@@ -101,18 +107,18 @@ async def synthesize_chunk(text: str):
     """
     if not text or not text.strip():
         return None
-    audio = await _synth_elevenlabs(text)
+    audio = await _synth_elevenlabs(text, language_code)
     if audio is None:
         return None
     return base64.b64encode(audio).decode("ascii")
 
 
-async def text_to_speech(text: str):
+async def text_to_speech(text: str, language_code: str = None):
     """Return base64 MP3 from ElevenLabs, or None (and speak via `say`)."""
     if not text or not text.strip():
         return None
 
-    audio = await _synth_elevenlabs(text)
+    audio = await _synth_elevenlabs(text, language_code)
     if audio is None:
         _say_fallback(text)
         return None

@@ -17,6 +17,49 @@ import subprocess
 # Anything else is refused without executing.
 ALLOWED_PREFIXES = ("open ", "ls", "pwd", "echo", "date", "whoami", "say ")
 
+# Friendly spoken app names -> the macOS application name `open -a` expects.
+APP_ALIASES = {
+    "vs code": "Visual Studio Code",
+    "vscode": "Visual Studio Code",
+    "code": "Visual Studio Code",
+    "spotify": "Spotify",
+    "chrome": "Google Chrome",
+    "browser": "Google Chrome",
+    "safari": "Safari",
+    "terminal": "Terminal",
+    "finder": "Finder",
+    "notes": "Notes",
+    "calendar": "Calendar",
+    "mail": "Mail",
+    "slack": "Slack",
+    "discord": "Discord",
+    "figma": "Figma",
+    "notion": "Notion",
+    "whatsapp": "WhatsApp",
+    "messages": "Messages",
+    "facetime": "FaceTime",
+    "photos": "Photos",
+    "music": "Music",
+    "maps": "Maps",
+    "word": "Microsoft Word",
+    "excel": "Microsoft Excel",
+    "powerpoint": "Microsoft PowerPoint",
+    "zoom": "zoom.us",
+    "claude": "Claude",
+}
+
+
+def _resolve_app(name: str) -> str:
+    """Map a spoken app name to its canonical macOS application name."""
+    if not name:
+        return name
+    return APP_ALIASES.get(name.strip().lower(), name.strip())
+
+
+def _esc_as(s: str) -> str:
+    """Escape a string for safe interpolation into an AppleScript literal."""
+    return str(s).replace("\\", "\\\\").replace('"', '\\"')
+
 
 def _is_allowed(cmd: str) -> bool:
     """True if ``cmd`` starts with one of the allowlisted command prefixes."""
@@ -81,23 +124,24 @@ def run_command(cmd: str):
 
 
 def open_app(name: str):
-    """Open a macOS application by name via `open -a`."""
+    """Open a macOS application by name (resolving common aliases) via `open -a`."""
     if not name or not name.strip():
         return "No application name provided."
+    app = _resolve_app(name)
     try:
         result = subprocess.run(
-            ["open", "-a", name],
+            ["open", "-a", app],
             capture_output=True,
             text=True,
             timeout=10,
         )
         if result.returncode != 0:
-            return f"Could not open {name}: {(result.stderr or '').strip()}"
-        return f"Opened {name}."
+            return f"Could not open {app}: {(result.stderr or '').strip()}"
+        return f"Opened {app}."
     except FileNotFoundError:
         return "`open` not available (not running on macOS)."
     except Exception as exc:  # noqa: BLE001 - fail gracefully
-        return f"Could not open {name}: {exc}"
+        return f"Could not open {app}: {exc}"
 
 
 # --------------------------------------------------------------------------- #
@@ -353,3 +397,44 @@ def pomodoro(notifier=None, focus_minutes: int = 25, break_minutes: int = 5):
         f"Pomodoro started: {focus_minutes} minutes of focus, then a "
         f"{break_minutes}-minute break. I'll announce each phase."
     )
+
+
+# --------------------------------------------------------------------------- #
+# App management (close / switch / list)
+# --------------------------------------------------------------------------- #
+
+
+def close_app(name: str):
+    """Quit a macOS application by name (resolving common aliases)."""
+    if not name or not name.strip():
+        return "No application name provided."
+    app = _resolve_app(name)
+    out, err = _run_applescript(f'quit app "{_esc_as(app)}"')
+    if err:
+        return f"Could not close {app}: {err}"
+    return f"Closed {app}."
+
+
+def switch_to_app(name: str):
+    """Bring a macOS application to the foreground (resolving common aliases)."""
+    if not name or not name.strip():
+        return "No application name provided."
+    app = _resolve_app(name)
+    out, err = _run_applescript(f'tell application "{_esc_as(app)}" to activate')
+    if err:
+        return f"Could not switch to {app}: {err}"
+    return f"Switched to {app}."
+
+
+def list_running_apps():
+    """Return the names of the user's foreground (non-background) apps."""
+    out, err = _run_applescript(
+        "tell application \"System Events\" to get name of every process "
+        "where background only is false"
+    )
+    if err:
+        return f"I couldn't list the running apps ({err})."
+    apps = [a.strip() for a in (out or "").split(",") if a.strip()]
+    if not apps:
+        return "No foreground apps appear to be running."
+    return "Currently open apps: " + ", ".join(apps) + "."
