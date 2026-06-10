@@ -190,6 +190,11 @@ body.act-listening #orb-glow {
   font-weight: 500;
   letter-spacing: 0.15em;
   font-family: "Rajdhani", sans-serif;
+  /* Counter-rotate each label (same 20s, opposite direction) around its own
+     centre so it orbits with the ring but always stays upright/readable. */
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: tick-upright 20s linear infinite;
 }
 
 .ring-2 {
@@ -315,6 +320,7 @@ body.act-thinking .scanline {
 
 #panel-left {
   left: 0;
+  margin-left: 20px;
   transform: translateY(-50%) translateX(0);
   border-left: 2px solid var(--cyan);
   border-radius: 0 4px 4px 0;
@@ -323,6 +329,7 @@ body.act-thinking .scanline {
 
 #panel-right {
   right: 0;
+  margin-right: 20px;
   transform: translateY(-50%) translateX(0);
   border-right: 2px solid var(--cyan);
   border-radius: 4px 0 0 4px;
@@ -615,12 +622,12 @@ body.act-speaking #status-bar .sb-wake {
 }
 
 /* ========================================================================
-   HUD control buttons (settings / log)
+   HUD control button (log)
    ===================================================================== */
-#settings-btn,
 #log-btn {
   position: fixed;
   top: 16px;
+  left: 20px;
   background: transparent;
   border: 1px solid rgba(0, 180, 255, 0.2);
   color: var(--cyan);
@@ -637,13 +644,6 @@ body.act-speaking #status-bar .sb-wake {
   transition: opacity 0.2s ease, border-color 0.2s ease,
     box-shadow 0.2s ease;
 }
-#settings-btn {
-  left: 20px;
-}
-#log-btn {
-  left: 96px;
-}
-#settings-btn:hover,
 #log-btn:hover {
   opacity: 1;
   border-color: rgba(0, 180, 255, 0.6);
@@ -670,7 +670,7 @@ body.act-speaking #status-bar .sb-wake {
 }
 
 /* ========================================================================
-   Conversation log + settings panel
+   Conversation log
    ===================================================================== */
 #log-panel {
   position: fixed;
@@ -710,48 +710,6 @@ body.act-speaking #status-bar .sb-wake {
   color: var(--st-thinking);
 }
 
-#settings-panel {
-  position: fixed;
-  top: 56px;
-  left: 20px;
-  width: 320px;
-  background: rgba(0, 15, 35, 0.92);
-  border: 1px solid rgba(0, 180, 255, 0.3);
-  border-left: 2px solid var(--cyan);
-  border-radius: 0 4px 4px 0;
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
-  padding: 18px;
-  z-index: 30;
-  display: none;
-}
-#settings-panel.open {
-  display: block;
-}
-#settings-panel h3 {
-  margin: 0 0 12px;
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--cyan);
-  letter-spacing: 0.18em;
-  text-transform: uppercase;
-}
-#settings-panel .note {
-  font-size: 12px;
-  font-weight: 300;
-  color: rgba(0, 212, 255, 0.7);
-  margin-top: 10px;
-  line-height: 1.5;
-}
-#settings-panel code {
-  color: var(--cyan);
-  background: rgba(0, 180, 255, 0.08);
-  padding: 1px 4px;
-  border-radius: 2px;
-  font-family: ui-monospace, monospace;
-  font-size: 11px;
-}
-
 /* ========================================================================
    Responsive — hide side panels on narrow screens
    ===================================================================== */
@@ -771,6 +729,15 @@ body.act-speaking #status-bar .sb-wake {
   }
 }
 @keyframes spin-ccw {
+  to {
+    transform: rotate(-360deg);
+  }
+}
+/* Cancels ring-1's clockwise spin so labels stay upright (same 20s). */
+@keyframes tick-upright {
+  from {
+    transform: rotate(0deg);
+  }
   to {
     transform: rotate(-360deg);
   }
