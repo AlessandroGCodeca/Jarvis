@@ -148,7 +148,8 @@ export class OrbVisualizer {
       0.1,
       100
     );
-    this.camera.position.z = 5;
+    // Camera pulled in (was 5) so the particle sphere renders ~40% larger.
+    this.camera.position.z = 3.57;
 
     // Build a fibonacci-sphere distribution of particles.
     this.basePositions = new Float32Array(PARTICLE_COUNT * 3);
@@ -220,6 +221,12 @@ export class OrbVisualizer {
   /** The shared AudioContext, so callers can decode audio into the same graph. */
   get audioContext(): AudioContext {
     return this.audioCtx;
+  }
+
+  /** The shared analyser (fed by the mic when listening and TTS when speaking),
+   *  so the waveform visualizer can read the same audio data the orb reacts to. */
+  getAnalyser(): AnalyserNode {
+    return this.analyser;
   }
 
   /** Browsers require a user gesture before audio can play; call on click. */
