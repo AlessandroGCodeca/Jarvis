@@ -3,6 +3,38 @@ import { VoiceInput } from "./voice";
 import { WSClient } from "./websocket";
 import { UI } from "./ui";
 import { initStarfield } from "./starfield";
+import { Waveform } from "./waveform";
+
+/**
+ * Short ascending boot chime (200→400→800Hz) via a Web Audio oscillator.
+ * Best-effort: if the browser blocks audio before a user gesture, it simply
+ * stays silent — no error, no blocking of the boot animation.
+ */
+function playBootSound(): void {
+  try {
+    const Ctx =
+      (window as any).AudioContext || (window as any).webkitAudioContext;
+    if (!Ctx) return;
+    const ctx: AudioContext = new Ctx();
+    if (ctx.state === "suspended") void ctx.resume().catch(() => {});
+    [200, 400, 800].forEach((freq, i) => {
+      const t0 = ctx.currentTime + i * 0.08;
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = "sine";
+      osc.frequency.value = freq;
+      gain.gain.setValueAtTime(0.0001, t0);
+      gain.gain.exponentialRampToValueAtTime(0.1, t0 + 0.01);
+      gain.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.08);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(t0);
+      osc.stop(t0 + 0.08);
+    });
+  } catch {
+    /* autoplay blocked — skip the sound gracefully */
+  }
+}
 
 /**
  * Infer a mood from JARVIS's response text to theme the orb's colour.
@@ -47,6 +79,15 @@ function main(): void {
   const voice = new VoiceInput();
   const ws = new WSClient("ws://localhost:8000/ws");
   const ui = new UI();
+
+  // Waveform visualizer reads the orb's shared analyser (mic while listening,
+  // TTS while speaking) and is driven by the UI's activity state.
+  const waveformCanvas = document.getElementById(
+    "waveform"
+  ) as HTMLCanvasElement | null;
+  if (waveformCanvas) {
+    ui.attachWaveform(new Waveform(waveformCanvas, orb.getAnalyser()));
+  }
 
   ws.attachOrb(orb);
 
@@ -215,11 +256,18 @@ function main(): void {
     afterTurn();
   });
 
-  // ---- Start the always-on wake listener on load ----
-  if (voice.isWakeWordSupported()) {
-    voice.startWakeWord();
-  }
-  ui.setVoiceStatus(voice.currentStatus());
+  // ---- HUD boot sequence ----
+  // The CSS animations (gated by body.booting) play the ~2.5s intro; we hold
+  // off arming the wake-word listener until they finish so the mic doesn't grab
+  // focus (or beep) mid-animation. Interaction is blocked via body.booting.
+  playBootSound();
+  window.setTimeout(() => {
+    document.body.classList.remove("booting");
+    if (voice.isWakeWordSupported()) {
+      voice.startWakeWord();
+    }
+    ui.setVoiceStatus(voice.currentStatus());
+  }, 2500);
 }
 
 window.addEventListener("DOMContentLoaded", main);

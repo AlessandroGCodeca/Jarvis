@@ -1,14 +1,16 @@
 /**
  * DOM/UI layer for JARVIS — Iron Man HUD edition.
  *
- * Builds the mic button, the bottom-center HUD status bar, and the conversation
- * log (toggle with "L"). It also drives the live readouts in
- * the two side panels declared in index.html (status, uptime, session count,
- * detected language, TTS state, wake-word state) and the body-level activity
- * class that themes the HUD overlays.
+ * Builds the mic button, the bottom-center HUD status bar, the log/fullscreen
+ * controls, and the conversation log (toggle with "L"). It also drives the live
+ * readouts in the two side panels declared in index.html (clock, status,
+ * uptime, session count, detected language, TTS state, wake-word state), the
+ * body-level activity class that themes the HUD overlays, and the waveform
+ * visualizer's state.
  */
 
 import type { VoiceStatus } from "./voice";
+import type { Waveform, WaveState } from "./waveform";
 
 type LogRole = "user" | "jarvis";
 type Activity = "standby" | "listening" | "thinking" | "speaking" | "offline";
@@ -21,6 +23,15 @@ const ACTIVITY_LABELS: Record<Activity, string> = {
   offline: "Offline",
 };
 
+// Map the HUD activity to the waveform's visual state.
+const WAVE_STATE: Record<Activity, WaveState> = {
+  standby: "idle",
+  listening: "listening",
+  thinking: "thinking",
+  speaking: "speaking",
+  offline: "idle",
+};
+
 export class UI {
   private statusBar!: HTMLDivElement;
   private stateLabel!: HTMLSpanElement;
@@ -29,9 +40,12 @@ export class UI {
   private logPanel!: HTMLDivElement;
 
   // Side-panel readout elements (declared in index.html).
+  private plTime: HTMLElement | null = null;
   private plStatus: HTMLElement | null = null;
   private plUptime: HTMLElement | null = null;
   private plSession: HTMLElement | null = null;
+  private plVoice: HTMLElement | null = null;
+  private plModel: HTMLElement | null = null;
   private prWake: HTMLElement | null = null;
   private prLang: HTMLElement | null = null;
   private prTts: HTMLElement | null = null;
@@ -41,6 +55,8 @@ export class UI {
   private connected = false;
   private sessionCount = 0;
   private startTime = Date.now();
+  private prevVoiceStatus: VoiceStatus | null = null;
+  private waveform: Waveform | null = null;
 
   // Callbacks wired by main.ts.
   private micHandler: () => void = () => {};
@@ -50,19 +66,30 @@ export class UI {
     this.queryPanels();
     this.buildStatusBar();
     this.buildLogButton();
+    this.buildFullscreenButton();
     this.buildTranscript();
     this.buildMicButton();
     this.buildLogPanel();
     this.bindKeys();
     this.startUptime();
+    this.startClock();
     this.setActivity("offline");
+  }
+
+  /** Give the UI the waveform so it can drive its state from activity changes. */
+  attachWaveform(waveform: Waveform): void {
+    this.waveform = waveform;
+    this.waveform.setState(WAVE_STATE[this.activity]);
   }
 
   // ---- Builders ----
   private queryPanels(): void {
+    this.plTime = document.getElementById("pl-time");
     this.plStatus = document.getElementById("pl-status");
     this.plUptime = document.getElementById("pl-uptime");
     this.plSession = document.getElementById("pl-session");
+    this.plVoice = document.getElementById("pl-voice");
+    this.plModel = document.getElementById("pl-model");
     this.prWake = document.getElementById("pr-wake");
     this.prLang = document.getElementById("pr-lang");
     this.prTts = document.getElementById("pr-tts");
@@ -92,6 +119,38 @@ export class UI {
     btn.textContent = "Log (L)";
     btn.addEventListener("click", () => this.toggleLog());
     document.body.appendChild(btn);
+  }
+
+  private buildFullscreenButton(): void {
+    const btn = document.createElement("button");
+    btn.id = "fullscreen-btn";
+    btn.textContent = "⛶ Fullscreen";
+    btn.addEventListener("click", () => this.toggleFullscreen());
+    document.body.appendChild(btn);
+    // Keep the label in sync if fullscreen is toggled by other means (Esc).
+    const update = (): void => {
+      const fs = !!(document.fullscreenElement || (document as any).webkitFullscreenElement);
+      btn.textContent = fs ? "⛶ Exit" : "⛶ Fullscreen";
+    };
+    document.addEventListener("fullscreenchange", update);
+    document.addEventListener("webkitfullscreenchange", update as EventListener);
+  }
+
+  private toggleFullscreen(): void {
+    const doc = document as any;
+    const el = document.documentElement as any;
+    const isFs = doc.fullscreenElement || doc.webkitFullscreenElement;
+    try {
+      if (!isFs) {
+        const req = el.requestFullscreen || el.webkitRequestFullscreen;
+        req?.call(el);
+      } else {
+        const exit = doc.exitFullscreen || doc.webkitExitFullscreen;
+        exit?.call(doc);
+      }
+    } catch (err) {
+      console.warn("Fullscreen toggle failed:", err);
+    }
   }
 
   private buildTranscript(): void {
@@ -129,6 +188,8 @@ export class UI {
       if (tag === "INPUT" || tag === "TEXTAREA") return;
       if (e.key === "l" || e.key === "L") {
         this.toggleLog();
+      } else if (e.key === "f" || e.key === "F") {
+        this.toggleFullscreen();
       }
     });
   }
@@ -140,6 +201,18 @@ export class UI {
       const mm = String(Math.floor((s % 3600) / 60)).padStart(2, "0");
       const ss = String(s % 60).padStart(2, "0");
       if (this.plUptime) this.plUptime.textContent = `${hh}:${mm}:${ss}`;
+    };
+    tick();
+    window.setInterval(tick, 1000);
+  }
+
+  private startClock(): void {
+    const tick = (): void => {
+      const now = new Date();
+      const hh = String(now.getHours()).padStart(2, "0");
+      const mm = String(now.getMinutes()).padStart(2, "0");
+      const ss = String(now.getSeconds()).padStart(2, "0");
+      if (this.plTime) this.plTime.textContent = `${hh}:${mm}:${ss}`;
     };
     tick();
     window.setInterval(tick, 1000);
@@ -172,10 +245,23 @@ export class UI {
 
     const label = ACTIVITY_LABELS[state];
     if (this.stateLabel) this.stateLabel.textContent = label;
-    if (this.plStatus) this.plStatus.textContent = label;
+    if (this.plStatus) {
+      this.plStatus.textContent = label;
+      // Brief white→cyan flash on every state change.
+      this.plStatus.classList.remove("flash");
+      void this.plStatus.offsetWidth; // restart the animation
+      this.plStatus.classList.add("flash");
+    }
     if (this.prTts) {
       this.prTts.textContent = state === "speaking" ? "Active" : "Idle";
     }
+    // MODEL row shows a transient "Processing…" while thinking.
+    if (this.plModel) {
+      this.plModel.textContent =
+        state === "thinking" ? "Processing…" : "Haiku 4.5";
+    }
+    // Drive the waveform visualizer.
+    this.waveform?.setState(WAVE_STATE[state]);
   }
 
   setMicActive(active: boolean): void {
@@ -205,7 +291,16 @@ export class UI {
 
   setVoiceStatus(status: VoiceStatus): void {
     const armed = status === "wake" || status === "session";
-    if (this.prWake) this.prWake.textContent = armed ? "Armed" : "Disabled";
+    if (this.prWake) {
+      this.prWake.textContent = armed ? "Armed" : "Disabled";
+      // Flash the row when the wake word fires (wake/off -> session).
+      if (status === "session" && this.prevVoiceStatus !== "session") {
+        this.prWake.classList.remove("flash");
+        void this.prWake.offsetWidth;
+        this.prWake.classList.add("flash");
+      }
+    }
+    this.prevVoiceStatus = status;
   }
 
   setStatus(state: "connected" | "disconnected"): void {

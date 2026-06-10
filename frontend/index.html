@@ -12,7 +12,10 @@
     />
     <link rel="stylesheet" href="/style.css" />
   </head>
-  <body>
+  <body class="booting">
+    <!-- Boot sequence overlay (Phase 1: darkness + sweeping scan line) -->
+    <div id="boot-overlay"><div class="boot-scan"></div></div>
+
     <!-- Layer 2: drifting star field -->
     <canvas id="starfield"></canvas>
 
@@ -26,6 +29,9 @@
     <div id="app">
       <canvas id="orb-canvas"></canvas>
     </div>
+
+    <!-- Arc reactor core glow at the exact centre of the orb -->
+    <div id="arc-core"></div>
 
     <!-- Layer 4: vignette -->
     <div id="vignette"></div>
@@ -43,10 +49,14 @@
         <circle class="marker" cx="270" cy="450" r="3" />
         <circle class="marker" cx="90" cy="270" r="3" />
         <circle class="marker" cx="270" cy="90" r="3" />
-        <text class="tick" x="270" y="80" text-anchor="middle">SYS</text>
-        <text class="tick" x="468" y="274" text-anchor="start">NET</text>
-        <text class="tick" x="270" y="472" text-anchor="middle">MEM</text>
-        <text class="tick" x="72" y="274" text-anchor="end">CPU</text>
+        <text class="tick" x="270" y="80" text-anchor="middle"
+          dominant-baseline="central">SYS</text>
+        <text class="tick" x="460" y="270" text-anchor="start"
+          dominant-baseline="central">NET</text>
+        <text class="tick" x="270" y="460" text-anchor="middle"
+          dominant-baseline="central">MEM</text>
+        <text class="tick" x="80" y="270" text-anchor="end"
+          dominant-baseline="central">CPU</text>
       </svg>
 
       <!-- Ring 2 — middle dashed bottom semicircle -->
@@ -70,12 +80,19 @@
       <div class="scanline"></div>
     </div>
 
+    <!-- Waveform visualizer (below the orb, above the status bar) -->
+    <canvas id="waveform" width="400" height="48"></canvas>
+
     <!-- Left tech readout: system status -->
     <aside id="panel-left" class="hud-panel">
       <div class="panel-title">JARVIS v2.0</div>
       <div class="panel-rule"></div>
+      <div class="panel-row clock-row">
+        <span class="k">Time</span><span class="v" id="pl-time">00:00:00</span>
+      </div>
       <div class="panel-row">
-        <span class="k">Status</span><span class="v" id="pl-status">Offline</span>
+        <span class="k">Status</span
+        ><span class="v" id="pl-status">Offline</span>
       </div>
       <div class="panel-row">
         <span class="k">Uptime</span><span class="v" id="pl-uptime">00:00:00</span>
@@ -89,10 +106,10 @@
         ><span class="v"><i class="led"></i>Active</span>
       </div>
       <div class="panel-row">
-        <span class="k">Voice</span><span class="v">EL Flash v2</span>
+        <span class="k">Voice</span><span class="v" id="pl-voice">EL Flash v2</span>
       </div>
       <div class="panel-row">
-        <span class="k">Model</span><span class="v">Haiku 4.5</span>
+        <span class="k">Model</span><span class="v" id="pl-model">Haiku 4.5</span>
       </div>
     </aside>
 

@@ -128,6 +128,43 @@ body.act-listening #orb-glow {
   z-index: 2;
 }
 
+/* ---- Arc reactor core (bright centre of the orb) ---- */
+#arc-core {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  width: 12px;
+  height: 12px;
+  margin: -6px 0 0 -6px;
+  z-index: 5;
+  pointer-events: none;
+  border-radius: 50%;
+  background: radial-gradient(
+    circle,
+    #ffffff 0%,
+    var(--cyan) 40%,
+    transparent 70%
+  );
+  box-shadow: 0 0 8px 4px rgba(0, 180, 255, 0.8),
+    0 0 20px 8px rgba(0, 100, 255, 0.4);
+  animation: arc-pulse 2s ease-in-out infinite;
+  transition: box-shadow 0.4s ease, background 0.4s ease;
+}
+body.act-speaking #arc-core {
+  box-shadow: 0 0 14px 6px rgba(0, 200, 255, 0.95),
+    0 0 34px 14px rgba(0, 120, 255, 0.6);
+}
+body.act-listening #arc-core {
+  background: radial-gradient(
+    circle,
+    #ffffff 0%,
+    #00ff88 40%,
+    transparent 70%
+  );
+  box-shadow: 0 0 12px 5px rgba(0, 255, 136, 0.85),
+    0 0 26px 10px rgba(0, 200, 120, 0.45);
+}
+
 /* ---- Layer 4: vignette ---- */
 #vignette {
   position: fixed;
@@ -149,8 +186,9 @@ body.act-listening #orb-glow {
   position: fixed;
   top: 50%;
   left: 50%;
-  width: 540px;
-  height: 540px;
+  /* 540 viewBox scaled up to 756px (×1.4) to match the larger orb. */
+  width: 756px;
+  height: 756px;
   transform: translate(-50%, -50%);
   z-index: 4;
   pointer-events: none;
@@ -222,35 +260,36 @@ body.act-listening #orb-glow {
   stroke-dasharray: 4 196.28;
 }
 
-/* Corner brackets (targeting reticle) sit on a ~340px box inside the hud */
+/* Corner brackets (targeting reticle) framing the orb tightly: their corners
+   sit ~15px outside the orb edge (diagonal radius ≈225px in the 756px hud). */
 .bracket {
   position: absolute;
-  width: 22px;
-  height: 22px;
+  width: 24px;
+  height: 24px;
   opacity: 0.5;
   transition: opacity 0.3s ease, transform 0.3s ease, border-color 0.3s ease;
 }
 .bracket-tl {
-  top: 100px;
-  left: 100px;
+  top: 219px;
+  left: 219px;
   border-top: 1px solid var(--cyan);
   border-left: 1px solid var(--cyan);
 }
 .bracket-tr {
-  top: 100px;
-  right: 100px;
+  top: 219px;
+  right: 219px;
   border-top: 1px solid var(--cyan);
   border-right: 1px solid var(--cyan);
 }
 .bracket-bl {
-  bottom: 100px;
-  left: 100px;
+  bottom: 219px;
+  left: 219px;
   border-bottom: 1px solid var(--cyan);
   border-left: 1px solid var(--cyan);
 }
 .bracket-br {
-  bottom: 100px;
-  right: 100px;
+  bottom: 219px;
+  right: 219px;
   border-bottom: 1px solid var(--cyan);
   border-right: 1px solid var(--cyan);
 }
@@ -283,9 +322,9 @@ body.act-thinking .bracket {
   position: absolute;
   top: 50%;
   left: 50%;
-  width: 300px;
+  width: 420px;
   height: 2px;
-  margin-left: -150px;
+  margin-left: -210px;
   background: linear-gradient(
     90deg,
     transparent,
@@ -297,6 +336,19 @@ body.act-thinking .bracket {
 }
 body.act-thinking .scanline {
   animation-duration: 1.2s;
+}
+
+/* ---- Waveform visualizer (below the orb, above the status bar) ---- */
+#waveform {
+  position: fixed;
+  left: 50%;
+  bottom: 196px;
+  transform: translateX(-50%);
+  width: 400px;
+  height: 48px;
+  z-index: 6;
+  pointer-events: none;
+  background: transparent;
 }
 
 /* ========================================================================
@@ -321,19 +373,19 @@ body.act-thinking .scanline {
 #panel-left {
   left: 0;
   margin-left: 20px;
-  transform: translateY(-50%) translateX(0);
+  transform: translateY(-50%);
   border-left: 2px solid var(--cyan);
   border-radius: 0 4px 4px 0;
-  animation: slide-in-left 0.8s ease both;
+  transition: border-left-color 0.3s ease;
 }
 
 #panel-right {
-  right: 0;
-  margin-right: 20px;
-  transform: translateY(-50%) translateX(0);
+  right: 20px;
+  max-width: 160px;
+  overflow: hidden;
+  transform: translateY(-50%);
   border-right: 2px solid var(--cyan);
   border-radius: 4px 0 0 4px;
-  animation: slide-in-right 0.8s ease both;
 }
 
 .panel-title {
@@ -430,6 +482,68 @@ body.act-listening #pr-visualizer span:nth-child(7) {
 }
 body.act-listening #pr-visualizer span:nth-child(8) {
   animation-duration: 0.84s;
+}
+
+/* Speaking: bars taller and faster. */
+body.act-speaking #pr-visualizer span {
+  opacity: 0.95;
+  animation: vbar-tall 0.4s ease-in-out infinite;
+}
+body.act-speaking #pr-visualizer span:nth-child(1) { animation-duration: 0.32s; }
+body.act-speaking #pr-visualizer span:nth-child(2) { animation-duration: 0.44s; }
+body.act-speaking #pr-visualizer span:nth-child(3) { animation-duration: 0.3s; }
+body.act-speaking #pr-visualizer span:nth-child(4) { animation-duration: 0.48s; }
+body.act-speaking #pr-visualizer span:nth-child(5) { animation-duration: 0.36s; }
+body.act-speaking #pr-visualizer span:nth-child(6) { animation-duration: 0.42s; }
+body.act-speaking #pr-visualizer span:nth-child(7) { animation-duration: 0.34s; }
+body.act-speaking #pr-visualizer span:nth-child(8) { animation-duration: 0.46s; }
+
+/* Thinking: slow left-to-right wave (same duration, staggered delays). */
+body.act-thinking #pr-visualizer span {
+  opacity: 0.7;
+  animation: vwave 1.4s ease-in-out infinite;
+}
+body.act-thinking #pr-visualizer span:nth-child(1) { animation-delay: 0s; }
+body.act-thinking #pr-visualizer span:nth-child(2) { animation-delay: 0.1s; }
+body.act-thinking #pr-visualizer span:nth-child(3) { animation-delay: 0.2s; }
+body.act-thinking #pr-visualizer span:nth-child(4) { animation-delay: 0.3s; }
+body.act-thinking #pr-visualizer span:nth-child(5) { animation-delay: 0.4s; }
+body.act-thinking #pr-visualizer span:nth-child(6) { animation-delay: 0.5s; }
+body.act-thinking #pr-visualizer span:nth-child(7) { animation-delay: 0.6s; }
+body.act-thinking #pr-visualizer span:nth-child(8) { animation-delay: 0.7s; }
+
+/* ---- Reactive panel accents ---- */
+.clock-row .v {
+  font-size: 13px;
+  font-weight: 500;
+  opacity: 1;
+}
+
+/* Left-panel border accent follows the state. */
+body.act-listening #panel-left { border-left-color: var(--st-listening); }
+body.act-thinking #panel-left { border-left-color: var(--st-thinking); }
+body.act-speaking #panel-left { border-left-color: var(--st-speaking); }
+body.act-offline #panel-left { border-left-color: var(--st-offline); }
+
+/* STATUS value flashes white then settles to cyan on each change. */
+#pl-status.flash {
+  animation: val-flash 0.2s ease;
+}
+
+/* VOICE row brightens while speaking. */
+body.act-speaking #pl-voice {
+  animation: voice-pulse 0.8s ease-in-out infinite;
+}
+
+/* TTS row goes green/ACTIVE while speaking. */
+body.act-speaking #pr-tts {
+  color: var(--st-listening);
+  text-shadow: 0 0 6px var(--st-listening);
+}
+
+/* WAKE WORD row flashes when the wake word fires. */
+#pr-wake.flash {
+  animation: wake-flash 0.6s ease;
 }
 
 /* ========================================================================
@@ -622,12 +736,12 @@ body.act-speaking #status-bar .sb-wake {
 }
 
 /* ========================================================================
-   HUD control button (log)
+   HUD control buttons (log / fullscreen)
    ===================================================================== */
-#log-btn {
+#log-btn,
+#fullscreen-btn {
   position: fixed;
   top: 16px;
-  left: 20px;
   background: transparent;
   border: 1px solid rgba(0, 180, 255, 0.2);
   color: var(--cyan);
@@ -644,7 +758,14 @@ body.act-speaking #status-bar .sb-wake {
   transition: opacity 0.2s ease, border-color 0.2s ease,
     box-shadow 0.2s ease;
 }
-#log-btn:hover {
+#log-btn {
+  left: 20px;
+}
+#fullscreen-btn {
+  right: 20px;
+}
+#log-btn:hover,
+#fullscreen-btn:hover {
   opacity: 1;
   border-color: rgba(0, 180, 255, 0.6);
   box-shadow: 0 0 8px rgba(0, 180, 255, 0.3);
@@ -711,6 +832,72 @@ body.act-speaking #status-bar .sb-wake {
 }
 
 /* ========================================================================
+   Boot sequence
+   ===================================================================== */
+/* Block all interaction until the boot animation finishes. */
+body.booting {
+  pointer-events: none;
+}
+
+#boot-overlay {
+  display: none;
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  background: #000208;
+  pointer-events: none;
+}
+body.booting #boot-overlay {
+  display: block;
+  opacity: 1;
+  animation: boot-overlay-out 0.4s ease 0.4s forwards;
+}
+#boot-overlay .boot-scan {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  height: 2px;
+  background: linear-gradient(90deg, transparent, var(--cyan), transparent);
+  box-shadow: 0 0 14px var(--cyan);
+  opacity: 0;
+}
+body.booting #boot-overlay .boot-scan {
+  animation: boot-scan 0.4s linear forwards;
+}
+
+/* Phase 2 — panels slide in (left, then right) and flicker in phase 5. */
+body.booting #panel-left {
+  animation: boot-panel-left 0.6s ease 0.5s both,
+    boot-flicker 0.5s linear 1.8s;
+}
+body.booting #panel-right {
+  animation: boot-panel-right 0.6s ease 0.6s both,
+    boot-flicker 0.5s linear 1.9s;
+}
+
+/* Phase 3 — rings + brackets spin up from scale 0. */
+body.booting #hud {
+  animation: boot-hud 0.5s cubic-bezier(0.2, 0.8, 0.2, 1) 0.8s both;
+}
+
+/* Phase 4 — orb materializes; glow, core and waveform fade in. */
+body.booting #orb-canvas {
+  animation: boot-orb 0.6s ease 1.2s both;
+}
+body.booting #orb-glow,
+body.booting #waveform {
+  animation: boot-fade 0.6s ease 1.2s both;
+}
+body.booting #arc-core {
+  animation: arc-pulse 2s ease-in-out 1.8s infinite,
+    boot-fade 0.6s ease 1.2s both;
+}
+body.booting #status-bar {
+  animation: boot-statusbar 0.5s ease 1.4s both;
+}
+
+/* ========================================================================
    Responsive — hide side panels on narrow screens
    ===================================================================== */
 @media (max-width: 900px) {
@@ -762,10 +949,10 @@ body.act-speaking #status-bar .sb-wake {
 }
 @keyframes scan {
   0% {
-    transform: translateY(-150px);
+    transform: translateY(-210px);
   }
   100% {
-    transform: translateY(150px);
+    transform: translateY(210px);
   }
 }
 @keyframes vbar {
@@ -805,23 +992,161 @@ body.act-speaking #status-bar .sb-wake {
     opacity: 0;
   }
 }
-@keyframes slide-in-left {
+@keyframes vbar-tall {
+  0%,
+  100% {
+    height: 4px;
+  }
+  50% {
+    height: 24px;
+  }
+}
+@keyframes vwave {
+  0%,
+  100% {
+    height: 3px;
+  }
+  50% {
+    height: 14px;
+  }
+}
+@keyframes arc-pulse {
+  0%,
+  100% {
+    opacity: 0.7;
+    transform: scale(0.9);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.1);
+  }
+}
+@keyframes val-flash {
+  0% {
+    color: #ffffff;
+    text-shadow: 0 0 8px #ffffff;
+  }
+  100% {
+    color: var(--cyan);
+    text-shadow: none;
+  }
+}
+@keyframes voice-pulse {
+  0%,
+  100% {
+    opacity: 0.9;
+  }
+  50% {
+    opacity: 1;
+    text-shadow: 0 0 8px var(--cyan);
+  }
+}
+@keyframes wake-flash {
+  0%,
+  100% {
+    color: var(--cyan);
+  }
+  50% {
+    color: #ffffff;
+    text-shadow: 0 0 8px #ffffff;
+  }
+}
+
+/* ---- Boot sequence keyframes ---- */
+@keyframes boot-scan {
+  0% {
+    top: 0;
+    opacity: 1;
+  }
+  100% {
+    top: 100%;
+    opacity: 1;
+  }
+}
+@keyframes boot-overlay-out {
+  to {
+    opacity: 0;
+  }
+}
+@keyframes boot-panel-left {
   from {
     opacity: 0;
-    transform: translateY(-50%) translateX(-40px);
+    transform: translateY(-50%) translateX(-100%);
   }
   to {
     opacity: 1;
     transform: translateY(-50%) translateX(0);
   }
 }
-@keyframes slide-in-right {
+@keyframes boot-panel-right {
   from {
     opacity: 0;
-    transform: translateY(-50%) translateX(40px);
+    transform: translateY(-50%) translateX(100%);
   }
   to {
     opacity: 1;
     transform: translateY(-50%) translateX(0);
+  }
+}
+@keyframes boot-hud {
+  from {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(0) rotate(-60deg);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1) rotate(0);
+  }
+}
+@keyframes boot-orb {
+  from {
+    opacity: 0;
+    transform: scale(0.3);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+@keyframes boot-fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@keyframes boot-statusbar {
+  from {
+    opacity: 0;
+    transform: translateX(-50%) translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+  }
+}
+@keyframes boot-flicker {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  12% {
+    opacity: 0.3;
+  }
+  24% {
+    opacity: 1;
+  }
+  40% {
+    opacity: 0.4;
+  }
+  52% {
+    opacity: 1;
+  }
+  68% {
+    opacity: 0.3;
+  }
+  80% {
+    opacity: 1;
   }
 }
