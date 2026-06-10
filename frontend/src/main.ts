@@ -2,6 +2,7 @@ import { OrbVisualizer, type Mood } from "./orb";
 import { VoiceInput } from "./voice";
 import { WSClient } from "./websocket";
 import { UI } from "./ui";
+import { initStarfield } from "./starfield";
 
 /**
  * Infer a mood from JARVIS's response text to theme the orb's colour.
@@ -37,6 +38,10 @@ function detectMood(text: string): Mood {
  */
 function main(): void {
   const canvas = document.getElementById("orb-canvas") as HTMLCanvasElement;
+
+  // Animated HUD background (drifting star field behind the orb).
+  const starfield = document.getElementById("starfield");
+  if (starfield) initStarfield(starfield as HTMLCanvasElement);
 
   const orb = new OrbVisualizer(canvas);
   const voice = new VoiceInput();
@@ -180,6 +185,7 @@ function main(): void {
         }
       }, 90000);
       ws.send(text); // flips orb into "thinking"
+      ui.setActivity("thinking"); // HUD state: processing
     } else {
       ui.showTranscript("Not connected to JARVIS backend.");
       afterTurn();
