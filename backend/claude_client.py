@@ -9,6 +9,7 @@ search, and terminal modules. Designed to be driven from an async server via
 import datetime
 import json
 import os
+import time
 
 import anthropic
 from dotenv import load_dotenv
@@ -17,15 +18,19 @@ import browser_module
 import calendar_module
 import briefing_module
 import currency_module
+import documents_module
 import files_module
 import language_module
 import mail_module
 import memory
 import news_module
 import notes_module
+import offline_module
 import preferences_module
+import reminders_module
 import spotify_module
 import system_actions
+import tasks_module
 import translation_module
 import weather_module
 import wiki_module
@@ -252,32 +257,6 @@ TOOLS = [
                 }
             },
             "required": [],
-        },
-    },
-    {
-        "name": "create_event",
-        "description": (
-            "Create an event in the user's Calendar. Provide a clear date and "
-            "time, e.g. date 'June 10, 2026' and time '3:00 PM'."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "title": {"type": "string", "description": "Event title."},
-                "date": {
-                    "type": "string",
-                    "description": "Event date, e.g. 'June 10, 2026'.",
-                },
-                "time": {
-                    "type": "string",
-                    "description": "Start time, e.g. '3:00 PM'.",
-                },
-                "duration": {
-                    "type": "integer",
-                    "description": "Duration in minutes (default 60).",
-                },
-            },
-            "required": ["title", "date", "time"],
         },
     },
     {
@@ -700,6 +679,246 @@ TOOLS = [
             "required": ["key"],
         },
     },
+    {
+        "name": "create_event",
+        "description": (
+            "Create a calendar event. Accepts natural date/time like "
+            "'tomorrow at 3pm' or 'next Monday at 10:00'. Use for 'add to "
+            "calendar', 'schedule', 'create event'."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "title": {"type": "string", "description": "Event title."},
+                "date": {
+                    "type": "string",
+                    "description": "Date phrase, e.g. 'tomorrow', 'June 10 2026'.",
+                },
+                "time": {
+                    "type": "string",
+                    "description": "Time phrase, e.g. '3pm', '10:00'.",
+                },
+                "duration_minutes": {
+                    "type": "integer",
+                    "description": "Length in minutes (default 60).",
+                },
+                "notes": {"type": "string", "description": "Optional notes."},
+            },
+            "required": ["title", "date"],
+        },
+    },
+    {
+        "name": "update_event",
+        "description": (
+            "Move or edit an existing calendar event found by title. Use for "
+            "'move meeting', 'reschedule', 'change my appointment'."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "title_or_id": {
+                    "type": "string",
+                    "description": "Title (or part) of the event to update.",
+                },
+                "new_title": {"type": "string", "description": "New title."},
+                "new_date": {"type": "string", "description": "New date phrase."},
+                "new_time": {"type": "string", "description": "New time phrase."},
+                "new_notes": {"type": "string", "description": "New notes."},
+            },
+            "required": ["title_or_id"],
+        },
+    },
+    {
+        "name": "delete_event",
+        "description": (
+            "Delete a calendar event by title. Provide the date when possible "
+            "to avoid deleting the wrong one. Use for 'cancel appointment', "
+            "'delete event'."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "title": {"type": "string", "description": "Event title."},
+                "date": {
+                    "type": "string",
+                    "description": "Date of the event (recommended).",
+                },
+            },
+            "required": ["title"],
+        },
+    },
+    {
+        "name": "create_reminder",
+        "description": (
+            "Create a reminder in the Reminders app, optionally with a due "
+            "date/time and priority (low/medium/high). Use for 'remind me', "
+            "'set a reminder'."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "title": {"type": "string", "description": "Reminder text."},
+                "due_date": {"type": "string", "description": "Due date phrase."},
+                "due_time": {"type": "string", "description": "Due time phrase."},
+                "notes": {"type": "string", "description": "Optional notes."},
+                "priority": {
+                    "type": "string",
+                    "enum": ["low", "medium", "high"],
+                    "description": "Priority (default medium).",
+                },
+            },
+            "required": ["title"],
+        },
+    },
+    {
+        "name": "get_reminders",
+        "description": "List pending reminders. Use for 'what are my reminders'.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "list_name": {
+                    "type": "string",
+                    "description": "Optional Reminders list to filter by.",
+                }
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "complete_reminder",
+        "description": "Mark a reminder as done. Use for 'mark as done'.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "title": {"type": "string", "description": "Reminder to complete."}
+            },
+            "required": ["title"],
+        },
+    },
+    {
+        "name": "create_text_file",
+        "description": (
+            "Create a plain .txt file (Desktop by default). Use for 'write a "
+            "file', 'save this as'."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "filename": {"type": "string", "description": "File name."},
+                "content": {"type": "string", "description": "File contents."},
+                "location": {
+                    "type": "string",
+                    "enum": ["Desktop", "Documents", "Downloads"],
+                    "description": "Where to save (default Desktop).",
+                },
+            },
+            "required": ["filename", "content"],
+        },
+    },
+    {
+        "name": "create_markdown_note",
+        "description": "Create a Markdown (.md) note on the Desktop and open it.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "title": {"type": "string", "description": "Note title/filename."},
+                "content": {"type": "string", "description": "Markdown body."},
+            },
+            "required": ["title", "content"],
+        },
+    },
+    {
+        "name": "create_word_doc",
+        "description": "Create a Word (.docx) document on the Desktop.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "filename": {"type": "string", "description": "File name."},
+                "content": {"type": "string", "description": "Document text."},
+            },
+            "required": ["filename", "content"],
+        },
+    },
+    {
+        "name": "read_file",
+        "description": (
+            "Read a file's contents (searches Desktop/Documents/Downloads by "
+            "name if no full path). Use for 'read my file', 'open my document'."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "path_or_name": {
+                    "type": "string",
+                    "description": "Full path or file name to read.",
+                }
+            },
+            "required": ["path_or_name"],
+        },
+    },
+    {
+        "name": "append_to_file",
+        "description": "Append text to an existing file.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "filename": {"type": "string", "description": "File path or name."},
+                "content": {"type": "string", "description": "Text to append."},
+            },
+            "required": ["filename", "content"],
+        },
+    },
+    {
+        "name": "add_task",
+        "description": (
+            "Add a task (to the JARVIS Tasks list + local store) with optional "
+            "due date and priority. Use for 'add task', 'todo'."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "title": {"type": "string", "description": "Task title."},
+                "due_date": {"type": "string", "description": "Due date phrase."},
+                "priority": {
+                    "type": "string",
+                    "enum": ["low", "medium", "high"],
+                    "description": "Priority (default medium).",
+                },
+            },
+            "required": ["title"],
+        },
+    },
+    {
+        "name": "get_tasks",
+        "description": (
+            "List pending tasks sorted by priority. Use for 'what are my "
+            "tasks', 'what's pending', 'task list'."
+        ),
+        "input_schema": {"type": "object", "properties": {}, "required": []},
+    },
+    {
+        "name": "complete_task",
+        "description": "Mark a task as done. Use for 'mark task done', 'complete task'.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "title": {"type": "string", "description": "Task to complete."}
+            },
+            "required": ["title"],
+        },
+    },
+    {
+        "name": "get_overdue_tasks",
+        "description": "List tasks that are past their due date.",
+        "input_schema": {"type": "object", "properties": {}, "required": []},
+    },
+    {
+        "name": "check_connectivity",
+        "description": (
+            "Report whether JARVIS is currently online or offline."
+        ),
+        "input_schema": {"type": "object", "properties": {}, "required": []},
+    },
 ]
 
 
@@ -761,6 +980,27 @@ def _format_memories(rows) -> str:
     return "\n".join(lines) if lines else "No matching memories."
 
 
+def _format_reminders(items) -> str:
+    """Format reminder dicts (or an error string) into spoken text."""
+    if isinstance(items, str):
+        return items
+    if not items:
+        return "You have no pending reminders."
+    lines = []
+    for r in items:
+        bit = r.get("title", "untitled")
+        if r.get("due"):
+            bit += f" (due {r['due']})"
+        lines.append(bit)
+    noun = "reminder" if len(lines) == 1 else "reminders"
+    return f"You have {len(lines)} {noun}: " + "; ".join(lines) + "."
+
+
+# Upcoming-events cache for the per-turn context block (calendar reads are slow).
+_CTX_CACHE = {"events": None, "ts": 0.0}
+_CTX_TTL = 300  # seconds
+
+
 class JarvisBrain:
     """One conversational session with Claude (per WebSocket connection)."""
 
@@ -785,7 +1025,12 @@ class JarvisBrain:
         self.locked_language = pref_lang if pref_lang and pref_lang != "en" else None
         self.language = self.locked_language or "en"
 
-    def _system_prompt(self, memories: str = "", language_instruction: str = "") -> str:
+    def _system_prompt(
+        self,
+        memories: str = "",
+        language_instruction: str = "",
+        context_block: str = "",
+    ) -> str:
         today = datetime.datetime.now().strftime("%A, %B %d, %Y")
         prompt = (
             "You are JARVIS, a voice assistant. Be concise (1-3 sentences "
@@ -798,10 +1043,12 @@ class JarvisBrain:
             "brightness, start focus/Do Not Disturb mode and timers, "
             "auto-detect the user's location for weather, convert currencies, "
             "open/close/switch between apps, find files using Spotlight "
-            "search, respond in the user's language (Slovak, Italian, Czech, "
-            "English), and remember user preferences across sessions. Before "
-            f"running a terminal command, briefly say what you're about to do. "
-            f"Current date: {today}."
+            "search, respond in the user's language, and remember user "
+            "preferences across sessions. You can now also: create, modify and "
+            "delete calendar events, set reminders with due dates, create "
+            "documents and Word files, manage task lists with priorities, and "
+            "work offline for local functions. Before running a terminal "
+            f"command, briefly say what you're about to do. Current date: {today}."
         )
 
         prefs_json = json.dumps(self.preferences, ensure_ascii=False)
@@ -812,6 +1059,19 @@ class JarvisBrain:
             "default city, units, etc.), call set_preference to remember it, "
             "then confirm briefly."
         )
+
+        if context_block:
+            prompt += "\n\n" + context_block
+
+        if offline_module.is_offline():
+            prompt += (
+                "\n\nIMPORTANT: You are currently offline. Only use tools that "
+                "work offline (calendar, reminders, notes, tasks, files, "
+                "volume/brightness, memory, app launcher, file finder). Do not "
+                "attempt web search, fresh weather, news, or Wikipedia. For "
+                "offline-unavailable requests, explain clearly and offer "
+                "local alternatives."
+            )
 
         if language_instruction:
             prompt += "\n\n" + language_instruction
@@ -838,9 +1098,104 @@ class JarvisBrain:
                 lines.append(f"- {content}")
         return "\n".join(lines)
 
+    def _offline_tool(self, name: str, tool_input: dict):
+        """Offline handling for internet-dependent tools. Returns text, or None
+        to let the normal (local) dispatch proceed."""
+        inp = tool_input or {}
+        if name == "search_web":
+            return "Web search is unavailable while you're offline."
+        if name == "get_news":
+            return "Unable to fetch news — you're offline."
+        if name == "search_wikipedia":
+            return "Unable to search Wikipedia — you're offline."
+        if name == "get_weather":
+            cached = offline_module.recall("weather")
+            return (
+                f"⚠ Offline — showing last known weather: {cached}"
+                if cached
+                else "Weather is unavailable while you're offline."
+            )
+        if name in ("convert_currency", "get_exchange_rate"):
+            cached = offline_module.recall("currency")
+            return (
+                f"⚠ Offline — using last known rate: {cached}"
+                if cached
+                else "Currency conversion is unavailable while you're offline."
+            )
+        if name == "translate":
+            code = language_module.normalize_language(
+                inp.get("target_language", "")
+            )
+            phrase = (
+                offline_module.offline_translate(inp.get("text", ""), code)
+                if code
+                else None
+            )
+            if phrase:
+                name_map = language_module.LANGUAGE_NAMES.get(code, "that language")
+                return f'In {name_map}, that\'s "{phrase}" (offline phrase book).'
+            return "Translation is unavailable offline, except common phrases."
+        return None  # not an internet-only tool — proceed normally
+
+    def _build_context(self) -> str:
+        """Build a rich per-turn context block for the system prompt."""
+        now = datetime.datetime.now()
+        hour = now.hour
+        if hour < 12:
+            tod = "morning"
+        elif hour < 17:
+            tod = "afternoon"
+        elif hour < 21:
+            tod = "evening"
+        else:
+            tod = "night"
+
+        # Upcoming events (cached ~5 min since calendar reads are slow).
+        events = _CTX_CACHE["events"]
+        if events is None or (time.time() - _CTX_CACHE["ts"]) > _CTX_TTL:
+            try:
+                raw = calendar_module.get_today_events()
+                events = raw[:2] if isinstance(raw, list) else []
+            except Exception:  # noqa: BLE001
+                events = []
+            _CTX_CACHE["events"] = events
+            _CTX_CACHE["ts"] = time.time()
+        upcoming = "; ".join(events) if events else "nothing on the calendar"
+
+        # Pending high-priority task count (local SQLite, fast).
+        try:
+            high = sum(
+                1
+                for t in tasks_module.get_all_tasks()
+                if t.get("priority") == "high"
+            )
+        except Exception:  # noqa: BLE001
+            high = 0
+
+        location = self.preferences.get("weather_city", "Prague")
+        lines = [
+            f"Current context: It's {tod} on {now.strftime('%A %H:%M')}.",
+            f"Upcoming: {upcoming}.",
+            f"{high} high-priority task(s) pending.",
+            f"User is currently in {location}.",
+            f"Connectivity: {offline_module.status_label()}.",
+            "Use this context to give proactive, relevant suggestions. If it's "
+            "morning, offer a briefing; if a meeting is within 30 minutes, "
+            "mention it; in the evening use a relaxed tone; after 10pm keep "
+            "replies short and quieter, and suggest rest if appropriate.",
+        ]
+        return "\n".join(lines)
+
     def _execute_tool(self, name: str, tool_input: dict) -> str:
         """Dispatch a tool call to the matching module. Always returns text."""
         try:
+            # Offline degradation: short-circuit tools that need the internet,
+            # serving cached values or a clear explanation where possible.
+            if offline_module.is_offline():
+                offline_result = self._offline_tool(name, tool_input)
+                if offline_result is not None:
+                    return offline_result
+
             if name == "get_calendar":
                 rng = (tool_input or {}).get("range", "today")
                 if rng == "week":
@@ -891,7 +1246,9 @@ class JarvisBrain:
             if name == "get_weather":
                 # None city -> auto-detect the user's location.
                 city = (tool_input or {}).get("city")
-                return weather_module.get_weather(city)
+                result = weather_module.get_weather(city)
+                offline_module.remember("weather", result)  # cache for offline
+                return result
 
             if name == "get_daily_briefing":
                 city = (tool_input or {}).get("city") or "Prague"
@@ -911,8 +1268,103 @@ class JarvisBrain:
                     inp.get("title", "Untitled"),
                     inp.get("date", ""),
                     inp.get("time", ""),
-                    int(inp.get("duration", 60)),
+                    int(inp.get("duration_minutes", inp.get("duration", 60))),
+                    calendar=inp.get("calendar"),
+                    notes=inp.get("notes"),
                 )
+
+            if name == "update_event":
+                inp = tool_input or {}
+                return calendar_module.update_event(
+                    inp.get("title_or_id", ""),
+                    new_title=inp.get("new_title"),
+                    new_date=inp.get("new_date"),
+                    new_time=inp.get("new_time"),
+                    new_notes=inp.get("new_notes"),
+                )
+
+            if name == "delete_event":
+                inp = tool_input or {}
+                return calendar_module.delete_event(
+                    inp.get("title", ""), inp.get("date")
+                )
+
+            if name == "create_reminder":
+                inp = tool_input or {}
+                return reminders_module.create_reminder(
+                    inp.get("title", ""),
+                    due_date=inp.get("due_date"),
+                    due_time=inp.get("due_time"),
+                    notes=inp.get("notes"),
+                    priority=inp.get("priority", "medium"),
+                )
+
+            if name == "get_reminders":
+                items = reminders_module.get_reminders(
+                    (tool_input or {}).get("list_name")
+                )
+                return _format_reminders(items)
+
+            if name == "complete_reminder":
+                return reminders_module.complete_reminder(
+                    (tool_input or {}).get("title", "")
+                )
+
+            if name == "create_text_file":
+                inp = tool_input or {}
+                return documents_module.create_text_file(
+                    inp.get("filename", "untitled"),
+                    inp.get("content", ""),
+                    inp.get("location", "Desktop"),
+                )
+
+            if name == "create_markdown_note":
+                inp = tool_input or {}
+                return documents_module.create_markdown_note(
+                    inp.get("title", "untitled"), inp.get("content", "")
+                )
+
+            if name == "create_word_doc":
+                inp = tool_input or {}
+                return documents_module.create_word_doc(
+                    inp.get("filename", "untitled"), inp.get("content", "")
+                )
+
+            if name == "read_file":
+                return documents_module.read_file(
+                    (tool_input or {}).get("path_or_name", "")
+                )
+
+            if name == "append_to_file":
+                inp = tool_input or {}
+                return documents_module.append_to_file(
+                    inp.get("filename", ""), inp.get("content", "")
+                )
+
+            if name == "add_task":
+                inp = tool_input or {}
+                return tasks_module.add_task(
+                    inp.get("title", ""),
+                    due_date=inp.get("due_date"),
+                    priority=inp.get("priority", "medium"),
+                )
+
+            if name == "get_tasks":
+                return tasks_module.format_tasks(tasks_module.get_all_tasks())
+
+            if name == "complete_task":
+                return tasks_module.complete_task(
+                    (tool_input or {}).get("title", "")
+                )
+
+            if name == "get_overdue_tasks":
+                overdue = tasks_module.get_overdue_tasks()
+                if not overdue:
+                    return "You have no overdue tasks."
+                return "Overdue: " + tasks_module.format_tasks(overdue)
+
+            if name == "check_connectivity":
+                return f"You are currently {offline_module.status_label()}."
 
             if name == "send_email":
                 inp = tool_input or {}
@@ -1000,11 +1452,13 @@ class JarvisBrain:
 
             if name == "convert_currency":
                 inp = tool_input or {}
-                return currency_module.convert_currency(
+                result = currency_module.convert_currency(
                     inp.get("amount"),
                     inp.get("from_currency", ""),
                     inp.get("to_currency", ""),
                 )
+                offline_module.remember("currency", result)  # cache for offline
+                return result
 
             if name == "get_exchange_rate":
                 inp = tool_input or {}
@@ -1111,9 +1565,11 @@ class JarvisBrain:
             )
 
         # Pull any relevant past memories once and fold them into the system
-        # prompt for this turn so JARVIS can actually recall earlier context.
+        # prompt for this turn so JARVIS can actually recall earlier context,
+        # along with a rich context block (time, upcoming events, tasks, ...).
+        context_block = self._build_context()
         system = self._system_prompt(
-            self._recall_block(user_text), language_instruction
+            self._recall_block(user_text), language_instruction, context_block
         )
 
         # Bound the number of tool iterations to avoid runaway loops.

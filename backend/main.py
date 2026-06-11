@@ -6,6 +6,7 @@ ElevenLabs, and returns text + base64 audio.
 """
 
 import asyncio
+import time
 from contextlib import asynccontextmanager
 
 from dotenv import load_dotenv
@@ -13,18 +14,65 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
 import memory
+import offline_module
+import tasks_module
 import tts_module
 from claude_client import JarvisBrain
+from notifications_module import NotificationEngine
 
 load_dotenv()
+
+# Per-connection notification sinks (each enqueues text onto that connection's
+# spoken-notification queue) + last user-interaction time for idle gating.
+_sinks: set = set()
+_last_interaction = time.time()
+
+
+def _broadcast(text: str, priority: str = "normal") -> None:
+    """Deliver a proactive spoken notification to all connected clients.
+
+    Routed through each connection's existing spoken-notification queue (the
+    same path timers use), so no frontend changes are needed.
+    """
+    for sink in list(_sinks):
+        try:
+            sink(text)
+        except Exception:  # noqa: BLE001 - a dead connection shouldn't break others
+            pass
+
+
+async def _connectivity_loop() -> None:
+    """Refresh the online/offline flag at startup and every 5 minutes."""
+    while True:
+        try:
+            await offline_module.check_connectivity()
+        except Exception:  # noqa: BLE001 - never crash on a probe failure
+            pass
+        await asyncio.sleep(300)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup: ensure the memory store exists.
+    # Startup: ensure the stores exist, do an initial connectivity probe, and
+    # start the background connectivity + proactive-notification tasks.
     memory.init_db()
-    yield
-    # Shutdown: nothing to clean up.
+    tasks_module.init_tasks_table()
+    try:
+        await offline_module.check_connectivity()
+    except Exception:  # noqa: BLE001
+        pass
+
+    conn_task = asyncio.ensure_future(_connectivity_loop())
+    engine = NotificationEngine(
+        _broadcast, idle_seconds=lambda: time.time() - _last_interaction
+    )
+    engine.start()
+    try:
+        yield
+    finally:
+        # Shutdown: stop background tasks cleanly.
+        await engine.stop()
+        conn_task.cancel()
 
 
 app = FastAPI(title="JARVIS", lifespan=lifespan)
@@ -43,7 +91,12 @@ app.add_middleware(
 
 @app.get("/")
 def health():
-    return {"status": "ok", "service": "JARVIS"}
+    return {
+        "status": "ok",
+        "service": "JARVIS",
+        "online": not offline_module.is_offline(),
+        "connectivity": offline_module.status_label(),
+    }
 
 
 @app.websocket("/ws")
@@ -81,6 +134,13 @@ async def websocket_endpoint(websocket: WebSocket):
         loop.call_soon_threadsafe(_arm)
 
     brain = JarvisBrain(notifier=schedule_notification)
+
+    # Register a sink so the proactive notification engine can broadcast spoken
+    # messages to this connection (enqueued onto the same path timers use).
+    def _sink(text: str) -> None:
+        notif_queue.put_nowait(text)
+
+    _sinks.add(_sink)
 
     async def speak(text: str, language_code: str = None) -> None:
         """Send text + streamed speech for one turn, serialized via send_lock."""
@@ -120,6 +180,8 @@ async def websocket_endpoint(websocket: WebSocket):
                 content = (data.get("content") or "").strip()
                 if not content:
                     continue
+                global _last_interaction
+                _last_interaction = time.time()
                 # Run the (blocking) Claude tool loop off the event loop.
                 reply = await asyncio.to_thread(brain.process, content)
                 # Speak the reply in the language JARVIS detected for this turn.
@@ -151,6 +213,7 @@ async def websocket_endpoint(websocket: WebSocket):
         except Exception:  # noqa: BLE001
             pass
     finally:
+        _sinks.discard(_sink)
         notifier_task.cancel()
         for task in list(timer_tasks):
             task.cancel()
