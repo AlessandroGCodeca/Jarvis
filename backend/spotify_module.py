@@ -3,9 +3,12 @@
 All calls are wrapped to fail gracefully when Spotify isn't installed/running,
 automation permission is denied, or we're off-macOS.
 
-Note on play(query): the Spotify AppleScript API can't search the catalog
-directly, so play() opens a Spotify search URI and starts playback (best-effort).
-The other controls (pause/resume/skip/volume/current) are exact.
+Note on play(query): the AppleScript `play` verb only resumes the current
+track — it cannot pick a search result. Playing the *requested* music requires
+an exact Spotify URI, which we resolve through the Web API search endpoint
+(needs SPOTIFY_CLIENT_ID / SPOTIFY_CLIENT_SECRET) and hand to
+`play track "<uri>"`. Without credentials we can only open the in-app search
+and resume playback (best-effort), and we say so honestly.
 """
 
 import base64
@@ -74,53 +77,147 @@ def _get_access_token():
         return None
 
 
-def _search_track(query: str):
-    """Resolve a query to (uri, "Song by Artist") via the Web API, or None."""
+def _api_get(endpoint: str, params: dict):
+    """GET a Spotify Web API endpoint. Returns parsed JSON, or None."""
     token = _get_access_token()
     if not token:
         return None
     try:
         resp = httpx.get(
-            "https://api.spotify.com/v1/search",
-            params={"q": query, "type": "track", "limit": 1},
+            f"https://api.spotify.com/v1/{endpoint}",
+            params=params,
             headers={"Authorization": f"Bearer {token}"},
             timeout=10,
         )
         resp.raise_for_status()
-        items = resp.json().get("tracks", {}).get("items", [])
-        if not items:
-            return None
-        track = items[0]
-        artists = ", ".join(a["name"] for a in track.get("artists", []))
-        label = f"{track['name']} by {artists}" if artists else track["name"]
-        return track["uri"], label
+        return resp.json()
     except Exception:  # noqa: BLE001
         return None
+
+
+def _track_info(track: dict):
+    """Return (uri, "Song by Artist") for a Web API track object."""
+    artists = ", ".join(a["name"] for a in track.get("artists", []))
+    label = f"{track['name']} by {artists}" if artists else track["name"]
+    return track["uri"], label
+
+
+def _resolve_query(query: str):
+    """Resolve a query to (uri, label, expected_track_uri) via the Web API.
+
+    - "lo-fi playlist"            -> the top matching playlist
+    - "Kanye West" (bare artist)  -> that artist's current top track
+    - anything else               -> the top matching track
+
+    expected_track_uri is the track we expect to see as "current track" once
+    playback starts (None for playlists). Returns None when the Web API is
+    unconfigured/unreachable or nothing matched.
+    """
+    lowered = query.lower()
+
+    if "playlist" in lowered:
+        name = " ".join(w for w in query.split() if w.lower() != "playlist")
+        data = _api_get(
+            "search", {"q": name or query, "type": "playlist", "limit": 1}
+        )
+        # The search endpoint can return null entries in playlist results.
+        items = [
+            p
+            for p in ((data or {}).get("playlists", {}).get("items") or [])
+            if p
+        ]
+        if items:
+            playlist = items[0]
+            return playlist["uri"], f"the playlist {playlist['name']}", None
+
+    data = _api_get("search", {"q": query, "type": "track,artist", "limit": 1})
+    if not data:
+        return None
+    artists = [a for a in (data.get("artists", {}).get("items") or []) if a]
+    tracks = [t for t in (data.get("tracks", {}).get("items") or []) if t]
+
+    # A bare artist name ("Kanye West") should play that artist's top track,
+    # not whichever track happens to match the words best.
+    if artists and artists[0]["name"].lower() == lowered:
+        artist = artists[0]
+        top = _api_get(f"artists/{artist['id']}/top-tracks", {"market": "US"})
+        top_tracks = (top or {}).get("tracks") or []
+        if top_tracks:
+            uri, label = _track_info(top_tracks[0])
+            return uri, label, uri
+
+    if tracks:
+        uri, label = _track_info(tracks[0])
+        return uri, label, uri
+    return None
+
+
+def _play_uri(uri: str):
+    """Tell the desktop app to play ``uri``. Returns an error message or None.
+
+    Launches Spotify first if needed: `play track` sent to a non-running app
+    errors out, which is one way playback used to silently fall back to
+    resuming the previous track.
+    """
+    if not uri or any(ch in uri for ch in '"\\'):
+        return "invalid Spotify URI"
+    script = f'''
+    if application "Spotify" is not running then
+        tell application "Spotify" to launch
+        delay 3
+    end if
+    tell application "Spotify" to play track "{uri}"
+    '''
+    out, err = _run_applescript(script)
+    return err
+
+
+def _confirm_playback(label: str, expected_track_uri: str = None):
+    """Wait for the player to switch tracks, then report what's playing.
+
+    Polls the app briefly so the confirmation reflects the *new* track rather
+    than whatever was playing before. Falls back to the search label if the
+    player can't be read in time.
+    """
+    for _ in range(4):
+        time.sleep(0.5)
+        out, err = _run_applescript(
+            'tell application "Spotify" to return (id of current track) '
+            '& " |::| " & (name of current track) & " |::| " '
+            '& (artist of current track)'
+        )
+        if err or not out:
+            continue
+        parts = [p.strip() for p in out.split("|::|")]
+        if len(parts) >= 3 and (
+            expected_track_uri is None or parts[0] == expected_track_uri
+        ):
+            return f"Now playing {parts[1]} by {parts[2]} on Spotify."
+    return f"Playing {label} on Spotify."
 
 
 def play(query: str = ""):
     """Search Spotify for ``query`` and start playback. Empty query resumes.
 
-    If SPOTIFY_CLIENT_ID/SECRET are configured, the exact track is resolved via
-    the Spotify Web API and played by URI (accurate). Otherwise it falls back to
-    opening a search URI in the app and starting playback (best-effort).
+    If SPOTIFY_CLIENT_ID/SECRET are configured, the query is resolved to an
+    exact URI (track, artist top track, or playlist) and played by URI.
+    Otherwise it falls back to opening a search URI in the app and resuming
+    playback (best-effort) — and the reply makes that limitation clear.
     """
     if not query or not query.strip():
         return resume()
     query = query.strip()
 
-    # Accurate path: resolve the exact track URI, then play it on the desktop app.
-    resolved = _search_track(query)
+    # Accurate path: resolve the exact URI, then play it on the desktop app.
+    resolved = _resolve_query(query)
     if resolved:
-        uri, label = resolved
-        out, err = _run_applescript(
-            f'tell application "Spotify" to play track "{uri}"'
-        )
+        uri, label, expected_track_uri = resolved
+        err = _play_uri(uri)
         if not err:
-            return f"Playing {label} on Spotify."
+            return _confirm_playback(label, expected_track_uri)
         # If AppleScript playback failed, fall through to the best-effort path.
 
-    # Fallback: open the search URI in the app and start playback.
+    # Fallback: open the search results in the app and resume playback.
     search_uri = "spotify:search:" + quote(query)
     script = f'''
     tell application "Spotify"
@@ -134,7 +231,16 @@ def play(query: str = ""):
     out, err = _run_applescript(script)
     if err:
         return f"Could not play '{query}': {err}"
-    return f"Searching Spotify for '{query}' and starting playback."
+    message = f"I opened Spotify search results for '{query}'."
+    now = get_current_track()
+    if now.startswith("Now playing"):
+        message += f" {now}"
+    if not os.getenv("SPOTIFY_CLIENT_ID") or not os.getenv("SPOTIFY_CLIENT_SECRET"):
+        message += (
+            " To let me play the exact song you ask for, add "
+            "SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET to backend/.env."
+        )
+    return message
 
 
 def pause():
@@ -170,7 +276,7 @@ def previous():
 
 
 def get_current_track():
-    """Return the current track as 'Song — Artist', or a friendly message."""
+    """Return the current track as 'Now playing Song by Artist.', or a friendly message."""
     script = '''
     tell application "Spotify"
         if player state is playing or player state is paused then
@@ -189,8 +295,8 @@ def get_current_track():
         return "Nothing is playing on Spotify right now."
     parts = out.split("|::|")
     if len(parts) >= 2:
-        return f"Now playing: {parts[0].strip()} by {parts[1].strip()}."
-    return f"Now playing: {out}."
+        return f"Now playing {parts[0].strip()} by {parts[1].strip()}."
+    return f"Now playing {out}."
 
 
 def get_volume():
