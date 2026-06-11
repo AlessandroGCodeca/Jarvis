@@ -8,20 +8,7 @@ import datetime
 import os
 import subprocess
 
-try:  # dateutil is a declared dependency; degrade gracefully if missing.
-    from dateutil import parser as _du_parser
-except Exception:  # noqa: BLE001
-    _du_parser = None
-
-_WEEKDAYS = {
-    "monday": 0,
-    "tuesday": 1,
-    "wednesday": 2,
-    "thursday": 3,
-    "friday": 4,
-    "saturday": 5,
-    "sunday": 6,
-}
+import time_parser
 
 # Calendars to skip when reading events. These are the auto-generated /
 # subscribed calendars (holidays, birthdays, Siri Suggestions) that hold
@@ -126,60 +113,12 @@ def get_week_events():
 def _parse_datetime(date_str: str, time_str: str = ""):
     """Parse flexible natural date/time strings into a datetime, or None.
 
-    Handles relative words ("tomorrow", "tonight", "next Monday") plus absolute
-    dates/times via dateutil ("June 10 2026 3pm", "2026-06-10 15:00", "3pm").
+    Delegates to the shared :mod:`time_parser` so the Calendar and Reminders
+    bridges interpret "today at 9", "tomorrow at 3:30", "in 30 minutes" and
+    bare times like "9:00" identically (Europe/Prague wall time).
     """
     combined = f"{date_str or ''} {time_str or ''}".strip()
-    if not combined:
-        return None
-    low = combined.lower()
-    now = datetime.datetime.now()
-
-    base = None
-    if "tomorrow" in low:
-        base = now + datetime.timedelta(days=1)
-    elif "today" in low or "tonight" in low:
-        base = now
-    else:
-        for name, idx in _WEEKDAYS.items():
-            if name in low:
-                # Next upcoming occurrence; if it's that weekday today, jump a
-                # week (so "Monday"/"next Monday" both mean the coming Monday).
-                ahead = (idx - now.weekday()) % 7
-                if ahead == 0:
-                    ahead = 7
-                base = now + datetime.timedelta(days=ahead)
-                break
-
-    # Strip relative words so dateutil can parse just the time-of-day.
-    cleaned = low
-    for w in ["tomorrow", "today", "tonight", "next", *_WEEKDAYS]:
-        cleaned = cleaned.replace(w, "")
-    cleaned = cleaned.replace(" at ", " ").strip()
-
-    parsed_time = None
-    if _du_parser and cleaned:
-        try:
-            # Zero out minutes/seconds so "3pm" -> 15:00, not the current minute.
-            time_default = now.replace(minute=0, second=0, microsecond=0)
-            parsed_time = _du_parser.parse(
-                cleaned, fuzzy=True, default=time_default
-            )
-        except (ValueError, OverflowError):
-            parsed_time = None
-
-    if base is not None:
-        hour = parsed_time.hour if parsed_time else (20 if "tonight" in low else 9)
-        minute = parsed_time.minute if parsed_time else 0
-        return base.replace(hour=hour, minute=minute, second=0, microsecond=0)
-
-    if _du_parser:
-        try:
-            default = now.replace(hour=9, minute=0, second=0, microsecond=0)
-            return _du_parser.parse(combined, fuzzy=True, default=default)
-        except (ValueError, OverflowError):
-            return None
-    return None
+    return time_parser.parse_datetime(combined)
 
 
 def _as_set_date(var: str, dt: datetime.datetime) -> str:
@@ -200,6 +139,46 @@ def _as_set_date(var: str, dt: datetime.datetime) -> str:
     )
 
 
+def _find_existing_event(title: str, dt: datetime.datetime):
+    """Start-date string of an event with the same title within ±1 hour of
+    ``dt``, or None. Best-effort: any failure reads as "no duplicate"."""
+    window_start = dt - datetime.timedelta(hours=1)
+    window_end = dt + datetime.timedelta(hours=1)
+    patterns = _skip_patterns()
+    skip_literal = ", ".join(f'"{_esc(p)}"' for p in patterns)
+    script = f'''
+    set skipList to {{{skip_literal}}}
+    set existingStart to ""
+    {_as_set_date("winStart", window_start)}
+    {_as_set_date("winEnd", window_end)}
+    with timeout of 20 seconds
+        tell application "Calendar"
+            repeat with cal in calendars
+                set cname to name of cal
+                set doSkip to false
+                repeat with pat in skipList
+                    ignoring case and diacriticals
+                        if cname contains pat then set doSkip to true
+                    end ignoring
+                end repeat
+                if doSkip is false then
+                    set matches to (every event of cal whose summary is "{_esc(title)}" and start date is greater than or equal to winStart and start date is less than or equal to winEnd)
+                    if (count of matches) > 0 then
+                        set existingStart to ((start date of (item 1 of matches)) as string)
+                        exit repeat
+                    end if
+                end if
+            end repeat
+        end tell
+    end timeout
+    return existingStart
+    '''
+    out, err = _run_applescript(script)
+    if err or not out:
+        return None
+    return out
+
+
 def create_event(
     title: str,
     date: str,
@@ -216,6 +195,14 @@ def create_event(
         minutes = int(duration_minutes)
     except (TypeError, ValueError):
         minutes = 60
+
+    # Never create duplicates: same title within an hour of this start time.
+    existing = _find_existing_event(title, dt)
+    if existing:
+        return (
+            f'You already have "{title}" on your calendar at {existing}. '
+            "Want me to update it instead?"
+        )
 
     safe_title = _esc(title)
     props = [f'summary:"{safe_title}"', "start date:startDate", "end date:endDate"]

@@ -34,6 +34,7 @@ import reminders_module
 import spotify_module
 import system_actions
 import tasks_module
+import time_parser
 import translation_module
 import weather_module
 import wiki_module
@@ -1319,7 +1320,7 @@ class JarvisBrain:
 
     def _build_context(self) -> str:
         """Build a rich per-turn context block for the system prompt."""
-        now = datetime.datetime.now()
+        now = time_parser.now_prague()
         hour = now.hour
         if hour < 12:
             tod = "morning"
@@ -1355,6 +1356,10 @@ class JarvisBrain:
         location = self.preferences.get("weather_city", "Prague")
         lines = [
             f"Current context: It's {tod} on {now.strftime('%A %H:%M')}.",
+            f"Current time: {now.strftime('%A %d %B %Y, %H:%M')}.",
+            f"Timezone: {time_parser.TIMEZONE_NAME}.",
+            "When the user says a bare hour like 'at 9', assume 9:00 AM "
+            "unless context suggests PM (1-6 usually mean PM, 7-12 AM).",
             f"Upcoming: {upcoming}.",
             f"{high} high-priority task(s) pending.",
             f"User is currently in {location}.",

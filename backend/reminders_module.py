@@ -3,12 +3,18 @@
 Create / list / complete / delete reminders, plus a due-soon query used by the
 proactive notification engine. Every call degrades gracefully off-macOS or when
 automation permission is denied. Natural date/time strings are parsed with the
-shared helper in :mod:`calendar_module`.
+shared :mod:`time_parser` (Europe/Prague), same as the Calendar bridge.
 """
 
 import subprocess
 
 import calendar_module
+import time_parser
+
+try:  # for parsing AppleScript date strings in the duplicate check
+    from dateutil import parser as _du_parser
+except Exception:  # noqa: BLE001
+    _du_parser = None
 
 # Task spec priority mapping (macOS Reminders priority field).
 _PRIORITY = {"low": 0, "medium": 1, "high": 9}
@@ -37,6 +43,31 @@ def _run_applescript(script: str):
         return None, str(exc)
 
 
+def _find_duplicate(title: str, dt):
+    """An existing pending reminder that would duplicate this one, or None.
+
+    A duplicate is a same-titled pending reminder due within 24 hours of the
+    new one (or one with no readable due date — better to ask than double up).
+    """
+    existing = get_reminders()
+    if not isinstance(existing, list):
+        return None  # Reminders unavailable — let creation proceed/fail there
+    key = title.strip().lower()
+    for r in existing:
+        if (r.get("title") or "").strip().lower() != key:
+            continue
+        due_str = (r.get("due") or "").strip()
+        if dt is None or not due_str or _du_parser is None:
+            return r
+        try:
+            existing_dt = _du_parser.parse(due_str, fuzzy=True)
+        except (ValueError, OverflowError):
+            return r
+        if abs((existing_dt - dt).total_seconds()) <= 24 * 3600:
+            return r
+    return None
+
+
 def create_reminder(
     title: str,
     due_date: str = None,
@@ -56,12 +87,28 @@ def create_reminder(
 
     due_block = ""
     when_label = ""
+    dt = None
     if due_date or due_time:
-        dt = calendar_module._parse_datetime(due_date or "", due_time or "")
+        combined = f"{due_date or ''} {due_time or ''}".strip()
+        dt = time_parser.parse_datetime(combined)
         if dt is not None:
             due_block = calendar_module._as_set_date("dueDate", dt)
             props.append("due date:dueDate")
             when_label = f" for {dt.strftime('%A, %B %d at %-I:%M %p')}"
+
+    # Never create duplicates: same title due within 24h of the new one.
+    duplicate = _find_duplicate(title, dt)
+    if duplicate:
+        due_str = (duplicate.get("due") or "").strip()
+        if due_str:
+            return (
+                f"You already have that reminder set for {due_str}. "
+                "Want me to update it instead?"
+            )
+        return (
+            f'You already have a reminder called "{title}". '
+            "Want me to update it instead?"
+        )
 
     target = f'list "{_esc(list_name)}"' if list_name else "default list"
     script = f'''

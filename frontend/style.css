@@ -84,6 +84,29 @@ body {
   transform-origin: center 40%;
 }
 
+/* ---- Animated floor grid below the orb (drawn by gridfloor.ts) ---- */
+#grid-floor {
+  position: fixed;
+  left: 50%;
+  top: calc(50% + 120px); /* spans from roughly the orb's bottom downward */
+  transform: translateX(-50%);
+  width: 600px;
+  height: 200px;
+  z-index: 1; /* behind the orb canvas (z 2) */
+  pointer-events: none;
+  /* Fade out at the edges so the floor dissolves into the background. */
+  -webkit-mask-image: radial-gradient(
+    ellipse at 50% 0%,
+    black 30%,
+    transparent 80%
+  );
+  mask-image: radial-gradient(
+    ellipse at 50% 0%,
+    black 30%,
+    transparent 80%
+  );
+}
+
 /* ---- Orb bloom / glow (behind particles) ---- */
 #orb-glow {
   position: fixed;
@@ -438,6 +461,24 @@ body.act-thinking .scanline {
   animation: led-blink 2s ease-in-out infinite;
 }
 
+/* Tiny usage bar for the CPU stats row (fill width/colour set from JS). */
+.statbar {
+  display: inline-block;
+  width: 34px;
+  height: 4px;
+  background: rgba(0, 180, 255, 0.15);
+  border-radius: 2px;
+  overflow: hidden;
+}
+.statbar-fill {
+  display: block;
+  height: 100%;
+  width: 0%;
+  background: var(--cyan);
+  border-radius: 2px;
+  transition: width 0.6s ease, background 0.6s ease;
+}
+
 /* Mini audio visualizer */
 .visualizer {
   display: flex;
@@ -623,6 +664,62 @@ body.act-speaking #pr-tts {
   box-shadow: 0 0 8px var(--st-offline);
 }
 
+/* ---- Mini 5-bar voice waveform (between the state dot and label) ---- */
+#status-bar .sb-wave {
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  height: 10px;
+}
+#status-bar .sb-wave i {
+  display: block;
+  width: 2px;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--st-offline);
+  opacity: 0.3;
+  transition: height 0.2s ease, background 0.2s ease, opacity 0.2s ease;
+}
+body.act-standby #status-bar .sb-wave i {
+  background: var(--st-standby);
+}
+
+/* SPEAKING: fast staggered bounce, 3-10px. */
+body.act-speaking #status-bar .sb-wave i {
+  background: var(--st-speaking);
+  opacity: 0.95;
+  animation: sbw-speak 0.3s ease-in-out infinite;
+}
+body.act-speaking #status-bar .sb-wave i:nth-child(1) { animation-duration: 0.22s; }
+body.act-speaking #status-bar .sb-wave i:nth-child(2) { animation-duration: 0.34s; }
+body.act-speaking #status-bar .sb-wave i:nth-child(3) { animation-duration: 0.26s; }
+body.act-speaking #status-bar .sb-wave i:nth-child(4) { animation-duration: 0.4s; }
+body.act-speaking #status-bar .sb-wave i:nth-child(5) { animation-duration: 0.3s; }
+
+/* LISTENING: slower bounce, 2-7px. */
+body.act-listening #status-bar .sb-wave i {
+  background: var(--st-listening);
+  opacity: 0.9;
+  animation: sbw-listen 0.7s ease-in-out infinite;
+}
+body.act-listening #status-bar .sb-wave i:nth-child(1) { animation-duration: 0.55s; }
+body.act-listening #status-bar .sb-wave i:nth-child(2) { animation-duration: 0.8s; }
+body.act-listening #status-bar .sb-wave i:nth-child(3) { animation-duration: 0.62s; }
+body.act-listening #status-bar .sb-wave i:nth-child(4) { animation-duration: 0.9s; }
+body.act-listening #status-bar .sb-wave i:nth-child(5) { animation-duration: 0.7s; }
+
+/* THINKING: left-to-right wave, 0.6s cycle. */
+body.act-thinking #status-bar .sb-wave i {
+  background: var(--st-thinking);
+  opacity: 0.8;
+  animation: sbw-think 0.6s ease-in-out infinite;
+}
+body.act-thinking #status-bar .sb-wave i:nth-child(1) { animation-delay: 0s; }
+body.act-thinking #status-bar .sb-wave i:nth-child(2) { animation-delay: 0.08s; }
+body.act-thinking #status-bar .sb-wave i:nth-child(3) { animation-delay: 0.16s; }
+body.act-thinking #status-bar .sb-wave i:nth-child(4) { animation-delay: 0.24s; }
+body.act-thinking #status-bar .sb-wave i:nth-child(5) { animation-delay: 0.32s; }
+
 #status-bar .sb-wake {
   color: var(--cyan);
   opacity: 0.6;
@@ -783,6 +880,8 @@ body.act-speaking #status-bar .sb-wake {
    ===================================================================== */
 body.overlay #starfield,
 body.overlay #grid,
+body.overlay #grid-floor,
+body.overlay .corner-deco,
 body.overlay #vignette,
 body.overlay #hud,
 body.overlay #panel-left,
@@ -822,38 +921,123 @@ body.overlay #log-panel {
   left: 0;
   right: 0;
   bottom: 0;
-  max-height: 38vh;
+  max-height: 60vh;
   overflow-y: auto;
-  background: rgba(0, 10, 25, 0.92);
-  border-top: 1px solid rgba(0, 180, 255, 0.3);
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
-  padding: 16px 20px 20px;
+  scroll-behavior: smooth;
+  background: rgba(0, 5, 15, 0.92);
+  border-top: 1px solid rgba(0, 180, 255, 0.15);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  padding: 16px;
   z-index: 20;
   display: none;
+  flex-direction: column;
+  gap: 10px;
 }
 #log-panel.open {
-  display: block;
+  display: flex;
 }
-#log-panel .entry {
-  margin-bottom: 10px;
-  font-size: 14px;
+
+/* Chat bubbles: user right-aligned, JARVIS left-aligned. */
+#log-panel .bubble {
+  max-width: 75%;
+  padding: 8px 12px;
+  font-family: "Rajdhani", sans-serif;
+  font-weight: 400;
+  font-size: 13px;
   line-height: 1.45;
-  color: #cdefff;
 }
-#log-panel .entry .role {
-  font-size: 10px;
-  text-transform: uppercase;
-  letter-spacing: 0.15em;
-  margin-right: 8px;
+#log-panel .bubble.user {
+  align-self: flex-end;
+  background: rgba(0, 100, 200, 0.3);
+  border: 1px solid rgba(0, 150, 255, 0.4);
+  border-radius: 12px 12px 2px 12px;
+  color: #ffffff;
+}
+#log-panel .bubble.jarvis {
+  align-self: flex-start;
+  background: rgba(0, 30, 60, 0.5);
+  border: 1px solid rgba(0, 180, 255, 0.2);
+  border-radius: 12px 12px 12px 2px;
+  color: #00d4ff;
+}
+#log-panel .bubble .b-label {
+  display: block;
+  font-size: 9px;
   font-weight: 600;
-}
-#log-panel .entry.user .role {
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
   color: var(--cyan);
+  opacity: 0.5;
+  margin-bottom: 3px;
 }
-#log-panel .entry.jarvis .role {
-  color: var(--st-thinking);
+#log-panel .bubble .b-orb {
+  font-style: normal;
+  font-size: 8px;
 }
+#log-panel .bubble .b-time {
+  display: block;
+  font-size: 10px;
+  opacity: 0.4;
+  margin-top: 3px;
+}
+#log-panel .bubble.user .b-time {
+  text-align: right;
+}
+#log-panel .bubble.jarvis .b-time {
+  text-align: left;
+}
+
+/* ========================================================================
+   Full-viewport HUD corner scopes
+   ===================================================================== */
+.corner-deco {
+  position: fixed;
+  width: 30px;
+  height: 30px;
+  z-index: 7;
+  pointer-events: none;
+}
+.cd-tl { top: 40px; left: 40px; }
+.cd-tr { top: 40px; right: 40px; }
+.cd-bl { bottom: 40px; left: 40px; }
+.cd-br { bottom: 40px; right: 40px; }
+
+/* Two nested L-shapes per corner (borders only on the corner's two sides). */
+.corner-deco i {
+  position: absolute;
+  display: block;
+  border: 0 solid var(--cyan);
+}
+.corner-deco .cd-outer {
+  width: 30px;
+  height: 30px;
+  opacity: 0.15;
+}
+.corner-deco .cd-inner {
+  width: 15px;
+  height: 15px;
+  opacity: 0.3;
+}
+.cd-tl i { top: 0; left: 0; border-top-width: 1px; border-left-width: 1px; }
+.cd-tr i { top: 0; right: 0; border-top-width: 1px; border-right-width: 1px; }
+.cd-bl i { bottom: 0; left: 0; border-bottom-width: 1px; border-left-width: 1px; }
+.cd-br i { bottom: 0; right: 0; border-bottom-width: 1px; border-right-width: 1px; }
+
+/* Data labels next to the top corners. */
+.corner-deco .cd-label {
+  position: absolute;
+  top: 2px;
+  white-space: nowrap;
+  font-size: 9px;
+  font-weight: 400;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  color: var(--cyan);
+  opacity: 0.45;
+}
+.cd-tl .cd-label { left: 38px; }
+.cd-tr .cd-label { right: 38px; }
 
 /* ========================================================================
    Boot sequence
@@ -986,6 +1170,34 @@ body.booting #status-bar {
   }
   50% {
     height: 18px;
+  }
+}
+/* Status-bar mini waveform */
+@keyframes sbw-speak {
+  0%,
+  100% {
+    height: 3px;
+  }
+  50% {
+    height: 10px;
+  }
+}
+@keyframes sbw-listen {
+  0%,
+  100% {
+    height: 2px;
+  }
+  50% {
+    height: 7px;
+  }
+}
+@keyframes sbw-think {
+  0%,
+  100% {
+    height: 2px;
+  }
+  50% {
+    height: 8px;
   }
 }
 @keyframes led-blink {

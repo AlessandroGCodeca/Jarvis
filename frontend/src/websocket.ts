@@ -1,7 +1,8 @@
 import type { OrbVisualizer } from "./orb";
 
 interface ResponseMessage {
-  type: "response";
+  // "response" = reply to the user; "proactive" = server-initiated (idle mood).
+  type: "response" | "proactive";
   text: string;
 }
 
@@ -112,7 +113,8 @@ export class WSClient {
     if (data.type === "pong") return;
 
     // Text arrives first (before TTS) so the UI can react immediately.
-    if (data.type === "response") {
+    // "proactive" (idle-mood phrases) follows the same display+audio path.
+    if (data.type === "response" || data.type === "proactive") {
       const msg = data as ResponseMessage;
       this.responseCb({ text: msg.text });
       return;
