@@ -198,30 +198,85 @@ export class VoiceInput {
     return STOP_PHRASES.some((p) => lower.includes(p));
   }
 
-  /** Short confirmation tone (~100ms) via a Web Audio oscillator. */
-  private _beep(freq = 880): void {
+  /** Lazily get the shared AudioContext (resumed), or null if unavailable. */
+  private _ensureCtx(): AudioContext | null {
     try {
       if (!this.beepCtx) {
         const Ctx =
           (window as any).AudioContext || (window as any).webkitAudioContext;
         this.beepCtx = new Ctx();
       }
-      const ctx = this.beepCtx!;
-      if (ctx.state === "suspended") void ctx.resume();
-      const osc = ctx.createOscillator();
-      const gain = ctx.createGain();
-      osc.type = "sine";
-      osc.frequency.value = freq;
-      const now = ctx.currentTime;
-      gain.gain.setValueAtTime(0.0001, now);
-      gain.gain.exponentialRampToValueAtTime(0.2, now + 0.01);
-      gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.1);
-      osc.connect(gain);
-      gain.connect(ctx.destination);
-      osc.start(now);
-      osc.stop(now + 0.1);
+      if (this.beepCtx!.state === "suspended") void this.beepCtx!.resume();
+      return this.beepCtx;
+    } catch {
+      return null;
+    }
+  }
+
+  /** Schedule one oscillator tone with an exponential fade-out. */
+  private _tone(
+    ctx: AudioContext,
+    freq: number,
+    startOffset: number,
+    duration: number,
+    type: OscillatorType,
+    volume: number
+  ): void {
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = type;
+    osc.frequency.value = freq;
+    const t0 = ctx.currentTime + startOffset;
+    gain.gain.setValueAtTime(volume, t0);
+    gain.gain.exponentialRampToValueAtTime(0.001, t0 + duration);
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start(t0);
+    osc.stop(t0 + duration + 0.05);
+  }
+
+  /** A brief white-noise "snap" for the system-activating feel. */
+  private _noiseBurst(ctx: AudioContext, durationMs: number, volume: number): void {
+    const len = Math.max(1, Math.floor((ctx.sampleRate * durationMs) / 1000));
+    const buffer = ctx.createBuffer(1, len, ctx.sampleRate);
+    const data = buffer.getChannelData(0);
+    for (let i = 0; i < len; i++) data[i] = Math.random() * 2 - 1;
+    const src = ctx.createBufferSource();
+    src.buffer = buffer;
+    const gain = ctx.createGain();
+    gain.gain.value = volume;
+    src.connect(gain);
+    gain.connect(ctx.destination);
+    src.start();
+  }
+
+  /** Iron Man-style ascending wake chime (~620ms) + a noise snap. */
+  playWakeSound(): void {
+    const ctx = this._ensureCtx();
+    if (!ctx) return;
+    try {
+      this._noiseBurst(ctx, 60, 0.05);
+      this._tone(ctx, 220, 0.0, 0.15, "sine", 0.15);
+      this._tone(ctx, 440, 0.08, 0.2, "sine", 0.2);
+      this._tone(ctx, 880, 0.18, 0.18, "sine", 0.25);
+      this._tone(ctx, 1320, 0.28, 0.12, "triangle", 0.15);
+      this._tone(ctx, 660, 0.32, 0.3, "sine", 0.1);
     } catch (err) {
-      console.warn("beep failed", err);
+      console.warn("wake sound failed", err);
+    }
+  }
+
+  /** Descending power-down chime (~400ms) for sleep / session end. */
+  playShutdownSound(): void {
+    const ctx = this._ensureCtx();
+    if (!ctx) return;
+    try {
+      this._tone(ctx, 1320, 0.0, 0.1, "sine", 0.18);
+      this._tone(ctx, 880, 0.1, 0.1, "sine", 0.15);
+      this._tone(ctx, 440, 0.2, 0.1, "sine", 0.12);
+      this._tone(ctx, 220, 0.3, 0.12, "sine", 0.1);
+    } catch (err) {
+      console.warn("shutdown sound failed", err);
     }
   }
 
@@ -342,7 +397,7 @@ export class VoiceInput {
   enterSession(): void {
     if (!this.supported || this.sessionActive) return;
     this.sessionActive = true;
-    this._beep(880); // wake/confirm tone
+    this.playWakeSound(); // Iron Man wake chime
     this._emitStatus(); // -> "session" (cyan)
     this.start(); // stop wake listener + begin command capture
     this._startSilenceTimer();
@@ -369,7 +424,7 @@ export class VoiceInput {
       }
     }
     if (wasActive) {
-      this._beep(440); // lower "going to sleep" tone
+      this.playShutdownSound(); // descending power-down chime
       this.sleepCb();
     }
     this._emitStatus(); // -> "wake" or "off"

@@ -10,6 +10,7 @@ could otherwise be steered (prompt injection) into running arbitrary commands.
 runs them with ``shell=False`` so shell metacharacters can't be abused.
 """
 
+import re
 import shlex
 import subprocess
 
@@ -438,3 +439,81 @@ def list_running_apps():
     if not apps:
         return "No foreground apps appear to be running."
     return "Currently open apps: " + ", ".join(apps) + "."
+
+
+# --------------------------------------------------------------------------- #
+# Battery
+# --------------------------------------------------------------------------- #
+
+
+def get_battery_status():
+    """Return {percent, charging, time_remaining} via `pmset -g batt`.
+
+    Returns None when the battery can't be read (e.g. a desktop Mac or
+    off-macOS). Never raises.
+    """
+    out = ""
+    try:
+        result = subprocess.run(
+            ["pmset", "-g", "batt"], capture_output=True, text=True, timeout=5
+        )
+        out = result.stdout or ""
+    except FileNotFoundError:
+        out = ""  # not macOS — try the AppleScript fallback below
+    except Exception:  # noqa: BLE001 - fail gracefully
+        out = ""
+
+    if out:
+        low = out.lower()
+        m = re.search(r"(\d+)%", out)
+        if m:
+            percent = int(m.group(1))
+            if "discharging" in low:
+                charging = False
+            elif "charging" in low or "charged" in low or "ac power" in low:
+                charging = True
+            else:
+                charging = False
+            tm = re.search(r"(\d+:\d+)\s+remaining", low)
+            if tm:
+                time_remaining = tm.group(1)
+            elif "charged" in low:
+                time_remaining = "charged"
+            else:
+                time_remaining = "unknown"
+            return {
+                "percent": percent,
+                "charging": charging,
+                "time_remaining": time_remaining,
+            }
+
+    # Best-effort AppleScript fallback (percentage only).
+    out2, err = _run_applescript(
+        'tell application "System Events" to get value of '
+        'battery of (get power source info)'
+    )
+    if not err and out2:
+        try:
+            return {
+                "percent": int(float(out2)),
+                "charging": False,
+                "time_remaining": "unknown",
+            }
+        except (TypeError, ValueError):
+            pass
+    return None
+
+
+def battery_summary():
+    """Natural-language battery status for the assistant."""
+    b = get_battery_status()
+    if not b:
+        return "I couldn't read the battery — this works on Mac laptops."
+    pct = b["percent"]
+    if b["charging"]:
+        if pct >= 100 or b["time_remaining"] == "charged":
+            return f"Battery is at {pct}% and fully charged."
+        return f"Battery is at {pct}% and charging."
+    tr = b["time_remaining"]
+    extra = f", about {tr} remaining" if tr not in ("unknown", "charged") else ""
+    return f"Battery is at {pct}%{extra}."

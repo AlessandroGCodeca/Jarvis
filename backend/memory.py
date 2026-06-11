@@ -21,13 +21,24 @@ def _connect() -> sqlite3.Connection:
 
 
 def init_db() -> None:
-    """Create the FTS5 table if it does not exist. Idempotent."""
+    """Create the FTS5 + corrections tables if they don't exist. Idempotent."""
     global _initialized
     conn = _connect()
     try:
         conn.execute(
             "CREATE VIRTUAL TABLE IF NOT EXISTS memories "
             "USING fts5(content, tag, timestamp UNINDEXED)"
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS corrections (
+                id INTEGER PRIMARY KEY,
+                wrong_assumption TEXT,
+                correct_info TEXT,
+                timestamp REAL,
+                topic TEXT
+            )
+            """
         )
         conn.commit()
     finally:
@@ -91,6 +102,38 @@ def get_recent(n: int = 10):
             "SELECT content, tag, timestamp FROM memories "
             "ORDER BY rowid DESC LIMIT ?",
             (n,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def save_correction(wrong: str, correct: str, topic: str = None) -> None:
+    """Persist a learned correction (what was wrong vs. what's right)."""
+    if not correct:
+        return
+    _ensure_init()
+    conn = _connect()
+    try:
+        conn.execute(
+            "INSERT INTO corrections (wrong_assumption, correct_info, "
+            "timestamp, topic) VALUES (?, ?, ?, ?)",
+            (wrong or "", correct, time.time(), topic),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_corrections(limit: int = 10):
+    """Return the most recent corrections, newest first."""
+    _ensure_init()
+    conn = _connect()
+    try:
+        rows = conn.execute(
+            "SELECT wrong_assumption, correct_info, timestamp, topic "
+            "FROM corrections ORDER BY id DESC LIMIT ?",
+            (limit,),
         ).fetchall()
         return [dict(r) for r in rows]
     finally:

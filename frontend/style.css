@@ -736,10 +736,11 @@ body.act-speaking #status-bar .sb-wake {
 }
 
 /* ========================================================================
-   HUD control buttons (log / fullscreen)
+   HUD control buttons (log / fullscreen / overlay)
    ===================================================================== */
 #log-btn,
-#fullscreen-btn {
+#fullscreen-btn,
+#overlay-btn {
   position: fixed;
   top: 16px;
   background: transparent;
@@ -764,11 +765,34 @@ body.act-speaking #status-bar .sb-wake {
 #fullscreen-btn {
   right: 20px;
 }
+#overlay-btn {
+  right: 132px;
+}
 #log-btn:hover,
-#fullscreen-btn:hover {
+#fullscreen-btn:hover,
+#overlay-btn:hover {
   opacity: 1;
   border-color: rgba(0, 180, 255, 0.6);
   box-shadow: 0 0 8px rgba(0, 180, 255, 0.3);
+}
+
+/* ========================================================================
+   Overlay mode (compact floating window — body.overlay)
+   overlay.html is self-contained, but these scoped rules ensure that if the
+   main HUD chrome is ever reused in the overlay it collapses to just the orb.
+   ===================================================================== */
+body.overlay #starfield,
+body.overlay #grid,
+body.overlay #vignette,
+body.overlay #hud,
+body.overlay #panel-left,
+body.overlay #panel-right,
+body.overlay #waveform,
+body.overlay #log-btn,
+body.overlay #fullscreen-btn,
+body.overlay #overlay-btn,
+body.overlay #log-panel {
+  display: none !important;
 }
 
 /* ========================================================================
