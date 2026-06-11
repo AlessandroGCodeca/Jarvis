@@ -12,10 +12,12 @@ import datetime
 import time
 
 import calendar_module
+import habits_module
 import news_module
 import offline_module
 import preferences_module
 import reminders_module
+import system_actions
 import tasks_module
 
 _CYCLE_SECONDS = 60
@@ -39,6 +41,9 @@ class NotificationEngine:
         self._running = False
         self._last_news = 0.0
         self._last_overdue_day: str | None = None
+        self._last_battery_check = 0.0
+        self._battery_notified: int | None = None  # last % we alerted at
+        self._last_habit_day: str | None = None
 
     def start(self) -> None:
         if self._task is None:
@@ -84,7 +89,68 @@ class NotificationEngine:
         await self._check_calendar()
         await self._check_reminders()
         await self._check_overdue_tasks()
+        await self._check_battery()
+        await self._check_habits()
         await self._check_news()
+
+    async def _check_battery(self) -> None:
+        # Throttle the (cheap) battery probe to ~every 5 minutes.
+        if time.time() - self._last_battery_check < 300:
+            return
+        self._last_battery_check = time.time()
+        try:
+            batt = await asyncio.to_thread(system_actions.get_battery_status)
+        except Exception as exc:  # noqa: BLE001
+            print(f"[notifications] battery check failed: {exc}")
+            return
+        if not batt:
+            return
+        pct, charging = batt["percent"], batt["charging"]
+        last = self._battery_notified
+
+        if charging:
+            if pct >= 100 and last != 100:
+                self._emit("Battery fully charged — you can unplug.", "normal")
+                self._battery_notified = 100
+            elif pct < 100 and last == 100:
+                self._battery_notified = None  # re-arm after unplug/charge dip
+            return
+
+        # Discharging: alert at <=20% (warn) / <=10% (urgent), re-alerting only
+        # after another ~5% drop.
+        if pct > 20:
+            self._battery_notified = None
+            return
+        if last is not None and last - pct < 5:
+            return
+        if pct <= 10:
+            self._emit(f"Battery critical — {pct}% remaining!", "urgent")
+        else:
+            self._emit(f"Battery at {pct}%, you should plug in soon.", "normal")
+        self._battery_notified = pct
+
+    async def _check_habits(self) -> None:
+        # Gentle evening nudge (9pm) for un-logged daily habits, once per day.
+        now = datetime.datetime.now()
+        if now.hour != 21:
+            return
+        today = now.strftime("%Y-%m-%d")
+        if self._last_habit_day == today:
+            return
+        self._last_habit_day = today
+        try:
+            unlogged = await asyncio.to_thread(
+                habits_module.get_unlogged_daily_habits
+            )
+        except Exception as exc:  # noqa: BLE001
+            print(f"[notifications] habit check failed: {exc}")
+            return
+        if unlogged:
+            habit = unlogged[0]
+            self._emit(
+                f"Hey — you haven't logged your {habit} today. Did you do it?",
+                "normal",
+            )
 
     async def _check_calendar(self) -> None:
         try:

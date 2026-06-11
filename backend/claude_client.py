@@ -9,6 +9,7 @@ search, and terminal modules. Designed to be driven from an async server via
 import datetime
 import json
 import os
+import re
 import time
 
 import anthropic
@@ -20,9 +21,11 @@ import briefing_module
 import currency_module
 import documents_module
 import files_module
+import habits_module
 import language_module
 import mail_module
 import memory
+import messages_module
 import news_module
 import notes_module
 import offline_module
@@ -39,6 +42,24 @@ load_dotenv()
 
 MODEL = os.getenv("CLAUDE_MODEL", "claude-haiku-4-5")
 MAX_HISTORY = 20
+
+# Phrases at the start of a turn that signal the user is correcting JARVIS.
+_CORRECTION_RE = re.compile(
+    r"^\s*(no+\b|nope\b|that'?s wrong|that'?s not right|not quite|not right|"
+    r"incorrect|wrong\b|i meant\b|actually\b|wait\b|that'?s incorrect)",
+    re.IGNORECASE,
+)
+# "my name is X" / "call me X" -> capture a preferred name.
+_NAME_RE = re.compile(
+    r"\b(?:my name is|call me|actually,?\s*my name is)\s+([A-Za-zÀ-ž'-]{2,30})",
+    re.IGNORECASE,
+)
+# "remember (that) ..." -> store an explicit note.
+_REMEMBER_RE = re.compile(r"\bremember\s+(?:that\s+)?(.+)", re.IGNORECASE)
+
+
+def _is_correction(text: str) -> bool:
+    return bool(_CORRECTION_RE.match(text or ""))
 
 TOOLS = [
     {
@@ -919,6 +940,139 @@ TOOLS = [
         ),
         "input_schema": {"type": "object", "properties": {}, "required": []},
     },
+    {
+        "name": "get_corrections",
+        "description": (
+            "Recall things the user has corrected you on before. Use for "
+            "'what have I gotten wrong before' or to avoid repeating mistakes."
+        ),
+        "input_schema": {"type": "object", "properties": {}, "required": []},
+    },
+    {
+        "name": "log_habit",
+        "description": (
+            "Log that the user completed a habit (creates it if new). Use for "
+            "'I worked out', 'I meditated', 'log that I ...'."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "habit_name": {"type": "string", "description": "Habit name."},
+                "notes": {"type": "string", "description": "Optional notes."},
+            },
+            "required": ["habit_name"],
+        },
+    },
+    {
+        "name": "get_habit_stats",
+        "description": (
+            "Get completion count + streak for a habit over a period. Use for "
+            "'my streak', 'how many times this week'."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "habit_name": {"type": "string", "description": "Habit name."},
+                "period": {
+                    "type": "string",
+                    "enum": ["today", "week", "month", "all time"],
+                    "description": "Window (default week).",
+                },
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "get_weekly_report",
+        "description": (
+            "Summarize all habits for the week with counts and streaks. Use for "
+            "'habit report'."
+        ),
+        "input_schema": {"type": "object", "properties": {}, "required": []},
+    },
+    {
+        "name": "list_habits",
+        "description": "List all tracked habits with their weekly stats.",
+        "input_schema": {"type": "object", "properties": {}, "required": []},
+    },
+    {
+        "name": "get_battery_status",
+        "description": (
+            "Report the Mac's battery level and charging state. Use for "
+            "'battery', 'how's my battery', 'charge'."
+        ),
+        "input_schema": {"type": "object", "properties": {}, "required": []},
+    },
+    {
+        "name": "get_imessages",
+        "description": (
+            "Read recent iMessages, optionally from a contact. Use for 'read "
+            "my messages', 'latest texts', 'messages from [name]'."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "contact": {"type": "string", "description": "Optional contact."},
+                "limit": {"type": "integer", "description": "How many (default 5)."},
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "send_imessage",
+        "description": (
+            "Send an iMessage. ALWAYS state the exact message and recipient and "
+            "get the user's spoken confirmation FIRST; only then call this with "
+            "confirmed=true. Without confirmed=true it will not send."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "contact": {"type": "string", "description": "Recipient name/number."},
+                "message": {"type": "string", "description": "Message text."},
+                "confirmed": {
+                    "type": "boolean",
+                    "description": "True only after the user confirmed out loud.",
+                },
+            },
+            "required": ["contact", "message"],
+        },
+    },
+    {
+        "name": "get_whatsapp_messages",
+        "description": (
+            "Read recent WhatsApp messages (fragile UI scripting; needs the "
+            "desktop app + Accessibility permission)."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "contact": {"type": "string", "description": "Optional contact."},
+                "limit": {"type": "integer", "description": "How many (default 5)."},
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "send_whatsapp",
+        "description": (
+            "Send a WhatsApp message. Same rule as iMessage: confirm the exact "
+            "message and recipient with the user first, then call with "
+            "confirmed=true."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "contact": {"type": "string", "description": "Recipient name/number."},
+                "message": {"type": "string", "description": "Message text."},
+                "confirmed": {
+                    "type": "boolean",
+                    "description": "True only after the user confirmed out loud.",
+                },
+            },
+            "required": ["contact", "message"],
+        },
+    },
 ]
 
 
@@ -996,6 +1150,18 @@ def _format_reminders(items) -> str:
     return f"You have {len(lines)} {noun}: " + "; ".join(lines) + "."
 
 
+def _format_messages(items) -> str:
+    """Format message dicts (or an info/error string) into spoken text."""
+    if isinstance(items, str):
+        return items
+    if not items:
+        return "No recent messages found."
+    lines = [
+        f"{m.get('sender', '?')}: {m.get('content', '')}".strip() for m in items
+    ]
+    return "Recent messages:\n" + "\n".join(lines)
+
+
 # Upcoming-events cache for the per-turn context block (calendar reads are slow).
 _CTX_CACHE = {"events": None, "ts": 0.0}
 _CTX_TTL = 300  # seconds
@@ -1024,6 +1190,8 @@ class JarvisBrain:
         )
         self.locked_language = pref_lang if pref_lang and pref_lang != "en" else None
         self.language = self.locked_language or "en"
+        # Last assistant reply, so the next turn can detect a correction of it.
+        self._last_response = ""
 
     def _system_prompt(
         self,
@@ -1047,7 +1215,12 @@ class JarvisBrain:
             "preferences across sessions. You can now also: create, modify and "
             "delete calendar events, set reminders with due dates, create "
             "documents and Word files, manage task lists with priorities, and "
-            "work offline for local functions. Before running a terminal "
+            "work offline for local functions. You can also track habits and "
+            "streaks, read iMessages/WhatsApp, check the battery, and learn "
+            "from corrections the user makes. IMPORTANT: never send a message "
+            "(iMessage/WhatsApp) without first stating the exact text and "
+            "recipient and getting the user's spoken confirmation, then calling "
+            "the send tool with confirmed=true. Before running a terminal "
             f"command, briefly say what you're about to do. Current date: {today}."
         )
 
@@ -1062,6 +1235,13 @@ class JarvisBrain:
 
         if context_block:
             prompt += "\n\n" + context_block
+
+        corrections = self._corrections_block()
+        if corrections:
+            prompt += (
+                "\n\nPast corrections to remember (do not repeat these "
+                "mistakes):\n" + corrections
+            )
 
         if offline_module.is_offline():
             prompt += (
@@ -1185,6 +1365,57 @@ class JarvisBrain:
             "replies short and quieter, and suggest rest if appropriate.",
         ]
         return "\n".join(lines)
+
+    def _corrections_block(self) -> str:
+        """Recent corrections, formatted for the system prompt."""
+        try:
+            rows = memory.get_corrections(10)
+        except Exception:  # noqa: BLE001
+            return ""
+        lines = []
+        for r in rows:
+            correct = (r.get("correct_info") or "").strip().replace("\n", " ")
+            wrong = (r.get("wrong_assumption") or "").strip().replace("\n", " ")
+            if correct:
+                if wrong:
+                    lines.append(f'- Correct: "{correct}" (I wrongly assumed: "{wrong[:80]}")')
+                else:
+                    lines.append(f'- Correct: "{correct}"')
+        return "\n".join(lines)
+
+    def _handle_learning(self, user_text: str) -> None:
+        """Detect corrections and 'remember/my name is' patterns, and persist."""
+        # 1) Correction of the previous reply.
+        if self._last_response and _is_correction(user_text):
+            try:
+                memory.save_correction(self._last_response, user_text)
+                memory.save_memory(
+                    f"CORRECTION: User said '{user_text}' when I assumed "
+                    f"'{self._last_response}'",
+                    tag="correction",
+                )
+            except Exception:  # noqa: BLE001 - learning is best-effort
+                pass
+
+        # 2) "my name is X" / "call me X" -> remember the name.
+        name_match = _NAME_RE.search(user_text)
+        if name_match:
+            name = name_match.group(1).strip().strip(".,!").capitalize()
+            try:
+                preferences_module.set_preference("name", name)
+                self.preferences["name"] = name
+            except Exception:  # noqa: BLE001
+                pass
+
+        # 3) "remember (that) ..." -> store an explicit note.
+        rem_match = _REMEMBER_RE.search(user_text)
+        if rem_match:
+            note = rem_match.group(1).strip()
+            if note:
+                try:
+                    memory.save_memory(f"User asked me to remember: {note}", tag="note")
+                except Exception:  # noqa: BLE001
+                    pass
 
     def _execute_tool(self, name: str, tool_input: dict) -> str:
         """Dispatch a tool call to the matching module. Always returns text."""
@@ -1525,6 +1756,76 @@ class JarvisBrain:
                     return f"No preference is set for '{key}'."
                 return f"{key}: {val}"
 
+            if name == "get_corrections":
+                rows = memory.get_corrections(10)
+                if not rows:
+                    return "You haven't corrected me on anything yet."
+                lines = [
+                    f"- {(r.get('correct_info') or '').strip()}"
+                    for r in rows
+                    if (r.get("correct_info") or "").strip()
+                ]
+                return "Here's what you've corrected me on:\n" + "\n".join(lines)
+
+            if name == "log_habit":
+                inp = tool_input or {}
+                return habits_module.log_habit(
+                    inp.get("habit_name", ""), inp.get("notes")
+                )
+
+            if name == "get_habit_stats":
+                inp = tool_input or {}
+                return habits_module.get_habit_stats(
+                    inp.get("habit_name"), inp.get("period", "week")
+                )
+
+            if name == "get_weekly_report":
+                return habits_module.get_weekly_report()
+
+            if name == "list_habits":
+                return habits_module.list_habits()
+
+            if name == "get_battery_status":
+                return system_actions.battery_summary()
+
+            if name == "get_imessages":
+                inp = tool_input or {}
+                return _format_messages(
+                    messages_module.get_imessages(
+                        inp.get("contact"), inp.get("limit", 5)
+                    )
+                )
+
+            if name == "send_imessage":
+                inp = tool_input or {}
+                contact = inp.get("contact", "")
+                message = inp.get("message", "")
+                if not inp.get("confirmed"):
+                    return (
+                        f'Please confirm out loud: send "{message}" to '
+                        f"{contact}? I won't send until you say yes."
+                    )
+                return messages_module.send_imessage(contact, message)
+
+            if name == "get_whatsapp_messages":
+                inp = tool_input or {}
+                return _format_messages(
+                    messages_module.get_whatsapp_messages(
+                        inp.get("contact"), inp.get("limit", 5)
+                    )
+                )
+
+            if name == "send_whatsapp":
+                inp = tool_input or {}
+                contact = inp.get("contact", "")
+                message = inp.get("message", "")
+                if not inp.get("confirmed"):
+                    return (
+                        f'Please confirm out loud: send "{message}" to '
+                        f"{contact} on WhatsApp? I won't send until you say yes."
+                    )
+                return messages_module.send_whatsapp(contact, message)
+
             return f"Unknown tool: {name}"
         except Exception as exc:  # noqa: BLE001 - keep the loop alive
             return f"Tool '{name}' failed: {exc}"
@@ -1544,6 +1845,9 @@ class JarvisBrain:
 
     def process(self, user_text: str) -> str:
         """Run one turn (including any tool calls) and return the reply text."""
+        # Learn from corrections / "remember…" / "my name is…" before replying.
+        self._handle_learning(user_text)
+
         self.history.append({"role": "user", "content": user_text})
 
         # Refresh preferences each turn so a mid-session set_preference is
@@ -1609,6 +1913,8 @@ class JarvisBrain:
             memory.save_memory(
                 f"User: {user_text}\nJARVIS: {text}", tag="conversation"
             )
+            # Remember this reply so the next turn can detect a correction of it.
+            self._last_response = text
             return text or "(no response)"
 
         # Safety net if the tool loop never settled.

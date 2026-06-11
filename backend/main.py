@@ -6,13 +6,16 @@ ElevenLabs, and returns text + base64 audio.
 """
 
 import asyncio
+import socket
 import time
+from collections import deque
 from contextlib import asynccontextmanager
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
+import habits_module
 import memory
 import offline_module
 import tasks_module
@@ -26,6 +29,19 @@ load_dotenv()
 # spoken-notification queue) + last user-interaction time for idle gating.
 _sinks: set = set()
 _last_interaction = time.time()
+
+# Shared brain + simple rate limiter for the /voice HTTP endpoint.
+_http_brain: JarvisBrain | None = None
+_voice_calls: deque = deque()  # timestamps of recent /voice requests
+_VOICE_RATE_LIMIT = 10  # max requests per minute
+
+
+def _local_ip() -> str:
+    """Best-effort local IP for the iPhone companion URL."""
+    try:
+        return socket.gethostbyname(socket.gethostname())
+    except Exception:  # noqa: BLE001
+        return "127.0.0.1"
 
 
 def _broadcast(text: str, priority: str = "normal") -> None:
@@ -57,10 +73,13 @@ async def lifespan(app: FastAPI):
     # start the background connectivity + proactive-notification tasks.
     memory.init_db()
     tasks_module.init_tasks_table()
+    habits_module.init_habits_tables()
     try:
         await offline_module.check_connectivity()
     except Exception:  # noqa: BLE001
         pass
+
+    print(f"📱 iPhone companion URL: http://{_local_ip()}:8000/voice")
 
     conn_task = asyncio.ensure_future(_connectivity_loop())
     engine = NotificationEngine(
@@ -83,6 +102,9 @@ app.add_middleware(
         "http://localhost:5173",
         "http://127.0.0.1:5173",
     ],
+    # Also allow requests from the local network (e.g. an iPhone Shortcut on
+    # the same Wi-Fi) — 192.168.x.x and 10.x.x.x on any port.
+    allow_origin_regex=r"http://(192\.168\.\d{1,3}\.\d{1,3}|10\.\d{1,3}\.\d{1,3}\.\d{1,3})(:\d+)?",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -97,6 +119,46 @@ def health():
         "online": not offline_module.is_offline(),
         "connectivity": offline_module.status_label(),
     }
+
+
+def _voice_rate_limited() -> bool:
+    """True if the /voice endpoint has exceeded its per-minute budget."""
+    now = time.time()
+    while _voice_calls and now - _voice_calls[0] > 60:
+        _voice_calls.popleft()
+    if len(_voice_calls) >= _VOICE_RATE_LIMIT:
+        return True
+    _voice_calls.append(now)
+    return False
+
+
+@app.post("/voice")
+async def voice_endpoint(request: Request):
+    """HTTP entry point for the iPhone Shortcut companion.
+
+    Accepts {"text": "..."}, runs it through the same brain pipeline, and
+    returns {"response": text, "audio": base64-mp3-or-null}. Rate-limited to
+    ten requests per minute.
+    """
+    if _voice_rate_limited():
+        return {"error": "rate limit exceeded — max 10 requests per minute"}
+    try:
+        body = await request.json()
+    except Exception:  # noqa: BLE001
+        return {"error": "invalid JSON body"}
+    text = (body.get("text") or "").strip()
+    if not text:
+        return {"error": "no text provided"}
+
+    global _http_brain
+    if _http_brain is None:
+        _http_brain = JarvisBrain()
+
+    reply = await asyncio.to_thread(_http_brain.process, text)
+    audio = await tts_module.text_to_speech(
+        reply, getattr(_http_brain, "language", None)
+    )
+    return {"response": reply, "audio": audio}
 
 
 @app.websocket("/ws")

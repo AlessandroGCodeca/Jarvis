@@ -57,16 +57,24 @@ export class UI {
   private startTime = Date.now();
   private prevVoiceStatus: VoiceStatus | null = null;
   private waveform: Waveform | null = null;
+  private stateChannel: BroadcastChannel | null = null;
 
   // Callbacks wired by main.ts.
   private micHandler: () => void = () => {};
   private wakeToggleHandler: () => void = () => {};
 
   constructor() {
+    // Broadcast state to the floating overlay window (if supported).
+    try {
+      this.stateChannel = new BroadcastChannel("jarvis-state");
+    } catch {
+      this.stateChannel = null;
+    }
     this.queryPanels();
     this.buildStatusBar();
     this.buildLogButton();
     this.buildFullscreenButton();
+    this.buildOverlayButton();
     this.buildTranscript();
     this.buildMicButton();
     this.buildLogPanel();
@@ -74,6 +82,21 @@ export class UI {
     this.startUptime();
     this.startClock();
     this.setActivity("offline");
+  }
+
+  private buildOverlayButton(): void {
+    const btn = document.createElement("button");
+    btn.id = "overlay-btn";
+    btn.textContent = "⊡ Overlay";
+    btn.addEventListener("click", () => {
+      window.open(
+        "overlay.html",
+        "JARVIS Overlay",
+        "width=280,height=280,alwaysOnTop=1,transparent=1,resizable=0," +
+          "menubar=0,toolbar=0,location=0,status=0"
+      );
+    });
+    document.body.appendChild(btn);
   }
 
   /** Give the UI the waveform so it can drive its state from activity changes. */
@@ -262,6 +285,13 @@ export class UI {
     }
     // Drive the waveform visualizer.
     this.waveform?.setState(WAVE_STATE[state]);
+
+    // Mirror the state to the floating overlay window.
+    try {
+      this.stateChannel?.postMessage({ state });
+    } catch {
+      /* channel closed */
+    }
   }
 
   setMicActive(active: boolean): void {
