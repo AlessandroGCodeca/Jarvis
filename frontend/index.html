@@ -22,6 +22,9 @@
     <!-- Layer 3: subtle perspective grid -->
     <div id="grid"></div>
 
+    <!-- Animated perspective floor grid below the orb (drawn by gridfloor.ts) -->
+    <canvas id="grid-floor" width="600" height="200"></canvas>
+
     <!-- Orb bloom / outer glow (sits behind the particle orb) -->
     <div id="orb-glow"></div>
 
@@ -45,17 +48,17 @@
           d="M142.72 397.28 A180 180 0 1 1 397.28 397.28"
           fill="none"
         />
-        <circle class="marker" cx="450" cy="270" r="3" />
-        <circle class="marker" cx="270" cy="450" r="3" />
-        <circle class="marker" cx="90" cy="270" r="3" />
-        <circle class="marker" cx="270" cy="90" r="3" />
-        <text class="tick" x="270" y="80" text-anchor="middle"
+        <circle class="marker" id="marker-net" cx="450" cy="270" r="3" />
+        <circle class="marker" id="marker-mem" cx="270" cy="450" r="3" />
+        <circle class="marker" id="marker-cpu" cx="90" cy="270" r="3" />
+        <circle class="marker" id="marker-sys" cx="270" cy="90" r="3" />
+        <text class="tick" id="tick-sys" x="270" y="80" text-anchor="middle"
           dominant-baseline="central">SYS</text>
-        <text class="tick" x="460" y="270" text-anchor="start"
+        <text class="tick" id="tick-net" x="460" y="270" text-anchor="start"
           dominant-baseline="central">NET</text>
-        <text class="tick" x="270" y="460" text-anchor="middle"
+        <text class="tick" id="tick-mem" x="270" y="460" text-anchor="middle"
           dominant-baseline="central">MEM</text>
-        <text class="tick" x="80" y="270" text-anchor="end"
+        <text class="tick" id="tick-cpu" x="80" y="270" text-anchor="end"
           dominant-baseline="central">CPU</text>
       </svg>
 
@@ -111,6 +114,22 @@
       <div class="panel-row">
         <span class="k">Model</span><span class="v" id="pl-model">Haiku 4.5</span>
       </div>
+      <div class="panel-rule"></div>
+      <div class="panel-row">
+        <span class="k">CPU</span
+        ><span class="v"
+          ><span class="statbar"><span class="statbar-fill" id="pl-cpu-bar"></span></span
+          ><span id="pl-cpu-val">—</span></span>
+      </div>
+      <div class="panel-row">
+        <span class="k">RAM</span><span class="v" id="pl-ram">—</span>
+      </div>
+      <div class="panel-row">
+        <span class="k">Disk</span><span class="v" id="pl-disk">—</span>
+      </div>
+      <div class="panel-row">
+        <span class="k">Battery</span><span class="v" id="pl-batt">—</span>
+      </div>
     </aside>
 
     <!-- Right tech readout: audio / signal -->
@@ -134,6 +153,22 @@
         <span class="k">TTS</span><span class="v" id="pr-tts">Idle</span>
       </div>
     </aside>
+
+    <!-- Full-viewport HUD corner scopes (double L-shapes + data labels) -->
+    <div class="corner-deco cd-tl" aria-hidden="true">
+      <i class="cd-outer"></i><i class="cd-inner"></i>
+      <span class="cd-label">LAT 50.08 / LON 14.43</span>
+    </div>
+    <div class="corner-deco cd-tr" aria-hidden="true">
+      <i class="cd-outer"></i><i class="cd-inner"></i>
+      <span class="cd-label" id="cd-date"></span>
+    </div>
+    <div class="corner-deco cd-bl" aria-hidden="true">
+      <i class="cd-outer"></i><i class="cd-inner"></i>
+    </div>
+    <div class="corner-deco cd-br" aria-hidden="true">
+      <i class="cd-outer"></i><i class="cd-inner"></i>
+    </div>
 
     <script type="module" src="/src/main.ts"></script>
   </body>

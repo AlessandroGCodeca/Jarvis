@@ -4,6 +4,7 @@ import { WSClient } from "./websocket";
 import { UI } from "./ui";
 import { initStarfield } from "./starfield";
 import { Waveform } from "./waveform";
+import { GridFloor } from "./gridfloor";
 
 /**
  * Short ascending boot chime (200→400→800Hz) via a Web Audio oscillator.
@@ -88,6 +89,12 @@ function main(): void {
   if (waveformCanvas) {
     ui.attachWaveform(new Waveform(waveformCanvas, orb.getAnalyser()));
   }
+
+  // Animated perspective floor grid below the orb (pulses with TTS audio).
+  const gridFloorCanvas = document.getElementById(
+    "grid-floor"
+  ) as HTMLCanvasElement | null;
+  if (gridFloorCanvas) new GridFloor(gridFloorCanvas, orb.getAnalyser());
 
   ws.attachOrb(orb);
 

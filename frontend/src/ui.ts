@@ -15,6 +15,34 @@ import type { Waveform, WaveState } from "./waveform";
 type LogRole = "user" | "jarvis";
 type Activity = "standby" | "listening" | "thinking" | "speaking" | "offline";
 
+/** Shape of the backend's /stats payload (every field nullable). */
+interface SystemStats {
+  cpu_percent: number | null;
+  ram_percent: number | null;
+  ram_used_gb: number | null;
+  ram_total_gb: number | null;
+  battery_percent: number | null;
+  battery_charging: boolean | null;
+  disk_percent: number | null;
+}
+
+const STATS_URL = "http://localhost:8000/stats";
+const STATS_INTERVAL_MS = 5000;
+
+/** Usage-style colour coding: green <60%, amber 60-85%, red >85%. */
+function levelColor(pct: number): string {
+  if (pct < 60) return "#00ff88";
+  if (pct <= 85) return "#ffb347";
+  return "#ff4444";
+}
+
+/** Battery is inverted: plenty left is green, nearly empty is red. */
+function batteryColor(pct: number): string {
+  if (pct > 50) return "#00ff88";
+  if (pct > 20) return "#ffb347";
+  return "#ff4444";
+}
+
 const ACTIVITY_LABELS: Record<Activity, string> = {
   standby: "Standby",
   listening: "Listening",
@@ -50,7 +78,22 @@ export class UI {
   private prLang: HTMLElement | null = null;
   private prTts: HTMLElement | null = null;
 
-  private logEntries: { role: LogRole; text: string }[] = [];
+  // System-stats readouts (left panel rows + ring telemetry).
+  private plCpuBar: HTMLElement | null = null;
+  private plCpuVal: HTMLElement | null = null;
+  private plRam: HTMLElement | null = null;
+  private plDisk: HTMLElement | null = null;
+  private plBatt: HTMLElement | null = null;
+  private tickSys: HTMLElement | null = null;
+  private tickNet: HTMLElement | null = null;
+  private tickMem: HTMLElement | null = null;
+  private tickCpu: HTMLElement | null = null;
+  private markerSys: HTMLElement | null = null;
+  private markerNet: HTMLElement | null = null;
+  private markerMem: HTMLElement | null = null;
+  private markerCpu: HTMLElement | null = null;
+
+  private logEntries: { role: LogRole; text: string; time: string }[] = [];
   private activity: Activity = "offline";
   private connected = false;
   private sessionCount = 0;
@@ -81,6 +124,8 @@ export class UI {
     this.bindKeys();
     this.startUptime();
     this.startClock();
+    this.startStatsPolling();
+    this.setCornerDate();
     this.setActivity("offline");
   }
 
@@ -116,6 +161,19 @@ export class UI {
     this.prWake = document.getElementById("pr-wake");
     this.prLang = document.getElementById("pr-lang");
     this.prTts = document.getElementById("pr-tts");
+    this.plCpuBar = document.getElementById("pl-cpu-bar");
+    this.plCpuVal = document.getElementById("pl-cpu-val");
+    this.plRam = document.getElementById("pl-ram");
+    this.plDisk = document.getElementById("pl-disk");
+    this.plBatt = document.getElementById("pl-batt");
+    this.tickSys = document.getElementById("tick-sys");
+    this.tickNet = document.getElementById("tick-net");
+    this.tickMem = document.getElementById("tick-mem");
+    this.tickCpu = document.getElementById("tick-cpu");
+    this.markerSys = document.getElementById("marker-sys");
+    this.markerNet = document.getElementById("marker-net");
+    this.markerMem = document.getElementById("marker-mem");
+    this.markerCpu = document.getElementById("marker-cpu");
   }
 
   private buildStatusBar(): void {
@@ -124,7 +182,7 @@ export class UI {
     this.statusBar.innerHTML = `
       <span class="sb-brand">◈ JARVIS</span>
       <span class="sb-divider"></span>
-      <span class="sb-state"><span class="sb-dot"></span><span class="sb-label">Offline</span></span>
+      <span class="sb-state"><span class="sb-dot"></span><span class="sb-wave"><i></i><i></i><i></i><i></i><i></i></span><span class="sb-label">Offline</span></span>
       <span class="sb-divider"></span>
       <span class="sb-wake" role="button" title="Toggle wake word">Hey JARVIS 🎙</span>`;
     document.body.appendChild(this.statusBar);
@@ -241,6 +299,94 @@ export class UI {
     window.setInterval(tick, 1000);
   }
 
+  /** "11.JUN.2026" date readout in the top-right corner decoration. */
+  private setCornerDate(): void {
+    const el = document.getElementById("cd-date");
+    if (!el) return;
+    const now = new Date();
+    const months = [
+      "JAN", "FEB", "MAR", "APR", "MAY", "JUN",
+      "JUL", "AUG", "SEP", "OCT", "NOV", "DEC",
+    ];
+    const dd = String(now.getDate()).padStart(2, "0");
+    el.textContent = `${dd}.${months[now.getMonth()]}.${now.getFullYear()}`;
+  }
+
+  /** Poll the backend's /stats every 5s and feed the HUD readouts. */
+  private startStatsPolling(): void {
+    const poll = async (): Promise<void> => {
+      try {
+        const res = await fetch(STATS_URL);
+        if (!res.ok) return;
+        this.applyStats((await res.json()) as SystemStats);
+      } catch {
+        /* backend down — keep showing the last values */
+      }
+    };
+    void poll();
+    window.setInterval(() => void poll(), STATS_INTERVAL_MS);
+  }
+
+  /** Push real system stats into the left panel rows and ring telemetry. */
+  private applyStats(s: SystemStats): void {
+    const cpu = s.cpu_percent;
+    if (cpu != null && this.plCpuVal) {
+      const color = levelColor(cpu);
+      this.plCpuVal.textContent = `${Math.round(cpu)}%`;
+      this.plCpuVal.style.color = color;
+      if (this.plCpuBar) {
+        this.plCpuBar.style.width = `${Math.min(100, Math.max(2, cpu))}%`;
+        this.plCpuBar.style.background = color;
+      }
+      if (this.tickCpu) this.tickCpu.textContent = `CPU ${Math.round(cpu)}%`;
+      if (this.markerCpu) this.markerCpu.style.fill = color;
+    }
+
+    const ram = s.ram_percent;
+    if (ram != null) {
+      const color = levelColor(ram);
+      if (this.plRam) {
+        this.plRam.textContent =
+          s.ram_used_gb != null && s.ram_total_gb != null
+            ? `${s.ram_used_gb}/${s.ram_total_gb} GB`
+            : `${Math.round(ram)}%`;
+        this.plRam.style.color = color;
+      }
+      if (this.tickMem) this.tickMem.textContent = `MEM ${Math.round(ram)}%`;
+      if (this.markerMem) this.markerMem.style.fill = color;
+    }
+
+    const disk = s.disk_percent;
+    if (disk != null) {
+      const color = levelColor(disk);
+      if (this.plDisk) {
+        this.plDisk.textContent = `${Math.round(disk)}%`;
+        this.plDisk.style.color = color;
+      }
+      if (this.tickSys) this.tickSys.textContent = `SYS ${Math.round(disk)}%`;
+      if (this.markerSys) this.markerSys.style.fill = color;
+    }
+
+    if (this.plBatt) {
+      if (s.battery_percent != null) {
+        const charge = s.battery_charging ? " ⚡" : "";
+        this.plBatt.textContent = `${s.battery_percent}%${charge}`;
+        this.plBatt.style.color = batteryColor(s.battery_percent);
+      } else {
+        this.plBatt.textContent = "N/A";
+        this.plBatt.style.color = "";
+      }
+    }
+
+    // NET telemetry follows the WebSocket connection, not psutil.
+    if (this.tickNet) {
+      this.tickNet.textContent = `NET ${this.connected ? "OK" : "—"}`;
+    }
+    if (this.markerNet) {
+      this.markerNet.style.fill = this.connected ? "#00ff88" : "#ff4444";
+    }
+  }
+
   // ---- Public API ----
   onMicToggle(handler: () => void): void {
     this.micHandler = handler;
@@ -353,7 +499,11 @@ export class UI {
   }
 
   addToLog(role: LogRole, text: string): void {
-    this.logEntries.push({ role, text });
+    const time = new Date().toLocaleTimeString([], {
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+    this.logEntries.push({ role, text, time });
     if (this.logEntries.length > 20) {
       this.logEntries = this.logEntries.slice(-20);
     }
@@ -372,13 +522,21 @@ export class UI {
   private renderLog(): void {
     this.logPanel.innerHTML = this.logEntries
       .map((entry) => {
-        const roleLabel = entry.role === "user" ? "You" : "JARVIS";
-        return `<div class="entry ${entry.role}"><span class="role">${roleLabel}</span>${escapeHtml(
-          entry.text
-        )}</div>`;
+        const label =
+          entry.role === "user"
+            ? "YOU"
+            : `<i class="b-orb">●</i> JARVIS`;
+        return `<div class="bubble ${entry.role}">
+          <span class="b-label">${label}</span>
+          <div class="b-text">${escapeHtml(entry.text)}</div>
+          <span class="b-time">${entry.time}</span>
+        </div>`;
       })
       .join("");
-    this.logPanel.scrollTop = this.logPanel.scrollHeight;
+    this.logPanel.scrollTo({
+      top: this.logPanel.scrollHeight,
+      behavior: "smooth",
+    });
   }
 
   private toggleLog(): void {

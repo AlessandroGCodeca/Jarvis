@@ -21,7 +21,9 @@ import offline_module
 import tasks_module
 import tts_module
 from claude_client import JarvisBrain
+from mood_module import IdleMoodEngine
 from notifications_module import NotificationEngine
+from system_stats import get_stats
 
 load_dotenv()
 
@@ -44,15 +46,18 @@ def _local_ip() -> str:
         return "127.0.0.1"
 
 
-def _broadcast(text: str, priority: str = "normal") -> None:
+def _broadcast(
+    text: str, priority: str = "normal", msg_type: str = "response"
+) -> None:
     """Deliver a proactive spoken notification to all connected clients.
 
     Routed through each connection's existing spoken-notification queue (the
-    same path timers use), so no frontend changes are needed.
+    same path timers use). ``msg_type`` is the WebSocket message type the text
+    is sent as ("response" for alerts, "proactive" for idle-mood phrases).
     """
     for sink in list(_sinks):
         try:
-            sink(text)
+            sink(text, msg_type)
         except Exception:  # noqa: BLE001 - a dead connection shouldn't break others
             pass
 
@@ -86,10 +91,17 @@ async def lifespan(app: FastAPI):
         _broadcast, idle_seconds=lambda: time.time() - _last_interaction
     )
     engine.start()
+    mood_engine = IdleMoodEngine(
+        broadcast=lambda text: _broadcast(text, "low", "proactive"),
+        idle_seconds=lambda: time.time() - _last_interaction,
+        has_clients=lambda: bool(_sinks),
+    )
+    mood_engine.start()
     try:
         yield
     finally:
         # Shutdown: stop background tasks cleanly.
+        await mood_engine.stop()
         await engine.stop()
         conn_task.cancel()
 
@@ -119,6 +131,13 @@ def health():
         "online": not offline_module.is_offline(),
         "connectivity": offline_module.status_label(),
     }
+
+
+@app.get("/stats")
+async def get_system_stats():
+    """Real system stats for the HUD panels (nulls when unavailable)."""
+    # cpu_percent samples for 0.1s, so keep it off the event loop.
+    return await asyncio.to_thread(get_stats)
 
 
 def _voice_rate_limited() -> bool:
@@ -165,8 +184,14 @@ async def voice_endpoint(request: Request):
 async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
 
+    # A fresh connection restarts the idle clock, so the mood engine never
+    # speaks during (or right after) the frontend's boot sequence.
+    global _last_interaction
+    _last_interaction = time.time()
+
     loop = asyncio.get_running_loop()
-    # Queue of pending spoken notifications (timer / pomodoro / focus alerts).
+    # Queue of pending spoken notifications (timer / pomodoro / focus alerts),
+    # as (text, msg_type) pairs.
     notif_queue: asyncio.Queue = asyncio.Queue()
     # Live delayed-notification tasks, cancelled on disconnect.
     timer_tasks: set = set()
@@ -185,7 +210,7 @@ async def websocket_endpoint(websocket: WebSocket):
             async def _fire() -> None:
                 try:
                     await asyncio.sleep(max(0.0, delay_seconds))
-                    await notif_queue.put(text)
+                    await notif_queue.put((text, "response"))
                 except asyncio.CancelledError:
                     pass
 
@@ -199,16 +224,18 @@ async def websocket_endpoint(websocket: WebSocket):
 
     # Register a sink so the proactive notification engine can broadcast spoken
     # messages to this connection (enqueued onto the same path timers use).
-    def _sink(text: str) -> None:
-        notif_queue.put_nowait(text)
+    def _sink(text: str, msg_type: str = "response") -> None:
+        notif_queue.put_nowait((text, msg_type))
 
     _sinks.add(_sink)
 
-    async def speak(text: str, language_code: str = None) -> None:
+    async def speak(
+        text: str, language_code: str = None, msg_type: str = "response"
+    ) -> None:
         """Send text + streamed speech for one turn, serialized via send_lock."""
         async with send_lock:
             # Send the text immediately so the UI reacts without waiting for TTS.
-            await websocket.send_json({"type": "response", "text": text})
+            await websocket.send_json({"type": msg_type, "text": text})
 
             # Stream speech sentence-by-sentence so the first sentence can start
             # playing while later ones are still being synthesized.
@@ -255,9 +282,9 @@ async def websocket_endpoint(websocket: WebSocket):
     async def notification_loop() -> None:
         """Speak notifications (e.g. a finished timer) as they come due."""
         while True:
-            text = await notif_queue.get()
+            text, msg_type = await notif_queue.get()
             try:
-                await speak(text)
+                await speak(text, msg_type=msg_type)
             except Exception:  # noqa: BLE001 - socket likely closing
                 return
 
