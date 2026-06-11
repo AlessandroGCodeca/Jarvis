@@ -2,10 +2,12 @@
 # then opens Chrome.
 #
 # Install (once):
-#   cp scripts/jarvis_alias.sh ~/.jarvis_alias
-#   echo 'source ~/.jarvis_alias' >> ~/.zshrc
-#   source ~/.zshrc
+#   bash scripts/install_jarvis.sh
 # Then just run:  jarvis
+#
+# Do NOT append this file to ~/.zshrc directly (cat >> ~/.zshrc) — if an old
+# `alias jarvis=` line exists there, zsh fails to parse the function with
+# "defining function based on alias". The installer cleans that up for you.
 
 jarvis() {
   cd ~/Desktop/Jarvis || { echo "✗ ~/Desktop/Jarvis not found"; return 1; }
