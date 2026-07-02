@@ -18,7 +18,10 @@ Microphone → Web Speech API → WebSocket → FastAPI → Claude (Haiku)
 
 ## Prerequisites
 
-- **Python 3.11+**
+- **Python 3.11–3.13** (3.12 recommended — `backend/.python-version` pins it
+  for pyenv/uv). Bleeding-edge releases work but are the road less traveled:
+  tooling and prebuilt wheels lag behind them, and the first cold import of the
+  dependency tree can be dramatically slower (see Troubleshooting).
 - **Node 18+**
 - **macOS** — required for the AppleScript bridges (Calendar, Mail, Notes) and
   the `say` TTS fallback. The web search, terminal, and Claude features work on
@@ -35,9 +38,20 @@ Microphone → Web Speech API → WebSocket → FastAPI → Claude (Haiku)
 
 ```bash
 cd backend
-python3 -m venv .venv && source .venv/bin/activate   # optional but recommended
-pip install -r requirements.txt
+./setup.sh                    # creates venv/, installs deps, precompiles + warms up imports
 cp .env.example .env          # then edit .env and fill in your keys
+```
+
+`setup.sh` picks python3.12 (falling back to 3.13/3.11; override with
+`PYTHON=python3.x ./setup.sh`), recreates `venv/`, installs
+`requirements.txt`, precompiles bytecode, and does one warm-up import so the
+server's first boot is fast. Prefer doing it by hand? The equivalent is:
+
+```bash
+cd backend
+python3.12 -m venv venv
+venv/bin/pip install -r requirements.txt
+venv/bin/python -m compileall -q venv/lib .
 ```
 
 `.env`:
@@ -56,8 +70,12 @@ ELEVENLABS_VOICE_ID=...
 
 ```bash
 cd backend
-uvicorn main:app --reload --port 8000
+venv/bin/uvicorn main:app --reload --port 8000
 ```
+
+You should see `JARVIS backend: loading...` immediately, then uvicorn's
+startup lines once it binds. Health check: `curl localhost:8000` returns
+`{"status":"ok","service":"JARVIS"}`.
 
 ### 3. Run the frontend
 
@@ -114,6 +132,40 @@ Frontend (`frontend/src/`):
   audio into the orb's AudioContext, drives orb state across the message flow.
 - `ui.ts` — `UI`: mic button, status, transcript, conversation log, settings.
 - `main.ts` — wires it all together.
+
+---
+
+## Troubleshooting
+
+### Backend starts but never binds port 8000 (silent uvicorn)
+
+The very first start after (re)installing dependencies can sit for a long
+time — minutes on some Macs — before printing anything past
+`JARVIS backend: loading...`. Nothing is wrong with the app; Python is
+compiling bytecode for thousands of freshly installed files and, on macOS,
+Gatekeeper is scanning each new file on first read. It is a one-time cost:
+warm imports are near-instant.
+
+- **Avoid it up front:** run `backend/setup.sh` — it precompiles bytecode and
+  performs a warm-up import at install time, so the first real boot binds in
+  seconds.
+- **Already stuck?** Either wait it out once, or kill it and run
+  `venv/bin/python -m compileall -q venv/lib .` followed by one throwaway
+  `PYTHONPATH="$(pwd)" venv/bin/python -c "import main"`, then start uvicorn.
+- **Measure it:** `time PYTHONPATH="$(pwd)" venv/bin/python -c "import main"`
+  — expect ~1–2 s warm. If it's slow *every* time (not just the first), the
+  venv likely fell back to source builds or pure-Python code paths; recreate
+  it on Python 3.12 with `./setup.sh`.
+
+### White page / dev-server assets returning 504
+
+A `npm run dev` (Vite) process left running for days or weeks can wedge: `/`
+still returns 200 from memory, but transformed assets like `/src/main.ts`
+time out with 504 because the transform/HMR pipeline has stalled (stale
+esbuild worker, exhausted file watchers, sockets broken across sleep/wake).
+Restart it — `Ctrl+C`, then `npm run dev`. If it recurs, clear the cache:
+`rm -rf node_modules/.vite`. Dev servers aren't built to run for weeks;
+restart them with your work session.
 
 ---
 
