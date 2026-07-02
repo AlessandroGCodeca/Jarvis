@@ -5,6 +5,12 @@ through the Claude brain (with tool calling), synthesizes speech via
 ElevenLabs, and returns text + base64 audio.
 """
 
+# Heartbeat before the heavy imports (FastAPI, anthropic, httpx). On a fresh
+# venv the first import can take a long time (bytecode compilation plus, on
+# macOS, Gatekeeper's first-run scan of new files) — without this line uvicorn
+# looks hung. Run backend/setup.sh to pay that cost at install time instead.
+print("JARVIS backend: loading...", flush=True)
+
 import asyncio
 import socket
 import time
