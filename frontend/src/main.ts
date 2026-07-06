@@ -170,7 +170,9 @@ function main(): void {
       voice.endSession();
     } else {
       if (!voice.isSupported()) {
-        ui.showTranscript("Speech recognition not supported in this browser.");
+        ui.showError(
+          "Voice input is not supported in this browser — use the text box."
+        );
         return;
       }
       interruptIfSpeaking(); // barge-in: cut JARVIS off, then listen
@@ -210,7 +212,9 @@ function main(): void {
     ui.showTranscript(text, true);
   });
 
-  voice.onResult((text) => {
+  // Send one user command over the WS. Shared by voice transcripts (Web
+  // Speech finals and /stt transcriptions alike) and the typed text input.
+  const sendCommand = (text: string) => {
     // Ignore duplicate finals: Chrome's Web Speech API can report the final
     // transcript more than once per utterance. Without this guard each one was
     // sent to the backend, producing two replies and two overlapping voices.
@@ -235,9 +239,21 @@ function main(): void {
       ws.send(text); // flips orb into "thinking"
       ui.setActivity("thinking"); // HUD state: processing
     } else {
-      ui.showTranscript("Not connected to JARVIS backend.");
+      ui.showError("Not connected to JARVIS backend.");
       afterTurn();
     }
+  };
+
+  voice.onResult(sendCommand);
+
+  // ---- Voice errors (mic denied, speech service down, STT failures) ----
+  voice.onError((message) => ui.showError(message));
+
+  // ---- Typed command fallback (works in every browser) ----
+  ui.onTextSubmit((text) => {
+    orb.resume(); // unlock AudioContext on user gesture
+    interruptIfSpeaking(); // typing while JARVIS talks barges in like voice
+    sendCommand(text);
   });
 
   // ---- Going to sleep (stop phrase / silence timeout / manual) ----

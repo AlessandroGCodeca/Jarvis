@@ -890,8 +890,92 @@ body.overlay #waveform,
 body.overlay #log-btn,
 body.overlay #fullscreen-btn,
 body.overlay #overlay-btn,
-body.overlay #log-panel {
+body.overlay #log-panel,
+body.overlay #text-input,
+body.overlay #error-toast {
   display: none !important;
+}
+
+/* ========================================================================
+   Text-input fallback (below the mic; dims until hovered/focused)
+   ===================================================================== */
+#text-input {
+  position: fixed;
+  left: 50%;
+  bottom: 10px;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 6px;
+  width: 320px;
+  z-index: 10;
+  opacity: 0.5;
+  transition: opacity 0.2s ease;
+}
+#text-input:focus-within,
+#text-input:hover {
+  opacity: 1;
+}
+#text-input input {
+  flex: 1;
+  background: rgba(0, 10, 25, 0.8);
+  border: 1px solid rgba(0, 180, 255, 0.25);
+  border-radius: 3px;
+  color: var(--cyan);
+  font-family: inherit;
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  padding: 7px 10px;
+  outline: none;
+}
+#text-input input::placeholder {
+  color: rgba(0, 180, 255, 0.45);
+  text-transform: uppercase;
+  letter-spacing: 0.15em;
+  font-size: 10px;
+}
+#text-input input:focus {
+  border-color: rgba(0, 180, 255, 0.6);
+  box-shadow: 0 0 10px rgba(0, 180, 255, 0.25);
+}
+#text-input button {
+  background: rgba(0, 10, 25, 0.8);
+  border: 1px solid rgba(0, 180, 255, 0.25);
+  border-radius: 3px;
+  color: var(--cyan);
+  cursor: pointer;
+  font-size: 12px;
+  padding: 0 12px;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+#text-input button:hover {
+  border-color: rgba(0, 180, 255, 0.6);
+  box-shadow: 0 0 8px rgba(0, 180, 255, 0.3);
+}
+
+/* ========================================================================
+   Error toast (voice/mic/transcription problems, above the status bar)
+   ===================================================================== */
+#error-toast {
+  position: fixed;
+  left: 50%;
+  bottom: 192px;
+  transform: translateX(-50%);
+  max-width: 70vw;
+  padding: 8px 14px;
+  background: rgba(40, 10, 0, 0.85);
+  border: 1px solid rgba(255, 179, 71, 0.5);
+  border-radius: 3px;
+  color: #ffb347;
+  font-size: 12px;
+  letter-spacing: 0.06em;
+  text-align: center;
+  z-index: 30;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.25s ease;
+}
+#error-toast.visible {
+  opacity: 1;
 }
 
 /* ========================================================================

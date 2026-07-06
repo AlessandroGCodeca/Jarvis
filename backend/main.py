@@ -18,12 +18,14 @@ from collections import deque
 from contextlib import asynccontextmanager
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, File, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 import habits_module
 import memory
 import offline_module
+import stt_module
 import tasks_module
 import tts_module
 from claude_client import JarvisBrain
@@ -184,6 +186,33 @@ async def voice_endpoint(request: Request):
         reply, getattr(_http_brain, "language", None)
     )
     return {"response": reply, "audio": audio}
+
+
+@app.post("/stt")
+async def stt_endpoint(file: UploadFile = File(...)):
+    """Speech-to-text for browsers without reliable Web Speech support (Safari).
+
+    Accepts a recorded audio blob (multipart field "file") and returns
+    {"text": transcript}. Failures come back as {"error": message} with a
+    meaningful status code so the frontend can surface them.
+    """
+    audio = await file.read()
+    if not audio:
+        return JSONResponse(
+            status_code=400, content={"error": "No audio received."}
+        )
+    try:
+        text = await stt_module.transcribe(
+            audio, file.content_type, file.filename
+        )
+        return {"text": text}
+    except stt_module.SttError as exc:
+        status = 503 if not stt_module.stt_configured() else 502
+        return JSONResponse(status_code=status, content={"error": str(exc)})
+    except Exception as exc:  # noqa: BLE001 - always answer with a clear error
+        return JSONResponse(
+            status_code=500, content={"error": f"Transcription failed: {exc}"}
+        )
 
 
 @app.websocket("/ws")

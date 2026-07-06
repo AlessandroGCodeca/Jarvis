@@ -105,6 +105,10 @@ export class UI {
   // Callbacks wired by main.ts.
   private micHandler: () => void = () => {};
   private wakeToggleHandler: () => void = () => {};
+  private textHandler: (text: string) => void = () => {};
+
+  private errorToast: HTMLDivElement | null = null;
+  private errorTimer: number | null = null;
 
   constructor() {
     // Broadcast state to the floating overlay window (if supported).
@@ -120,6 +124,7 @@ export class UI {
     this.buildOverlayButton();
     this.buildTranscript();
     this.buildMicButton();
+    this.buildTextInput();
     this.buildLogPanel();
     this.bindKeys();
     this.startUptime();
@@ -254,6 +259,25 @@ export class UI {
       </svg>`;
     this.micBtn.addEventListener("click", () => this.micHandler());
     document.body.appendChild(this.micBtn);
+  }
+
+  /** Typed-command fallback: works in every browser, independent of the mic. */
+  private buildTextInput(): void {
+    const form = document.createElement("form");
+    form.id = "text-input";
+    form.innerHTML = `
+      <input type="text" placeholder="Type a command" aria-label="Type a command"
+             autocomplete="off" autocapitalize="off" spellcheck="false" />
+      <button type="submit" aria-label="Send">➤</button>`;
+    const field = form.querySelector("input") as HTMLInputElement;
+    form.addEventListener("submit", (e) => {
+      e.preventDefault();
+      const text = field.value.trim();
+      if (!text) return;
+      field.value = "";
+      this.textHandler(text);
+    });
+    document.body.appendChild(form);
   }
 
   private buildLogPanel(): void {
@@ -394,6 +418,28 @@ export class UI {
 
   onWakeToggle(handler: () => void): void {
     this.wakeToggleHandler = handler;
+  }
+
+  onTextSubmit(handler: (text: string) => void): void {
+    this.textHandler = handler;
+  }
+
+  /** Show an error in the HUD: a transient toast above the status bar + a log
+   *  entry — voice/mic problems must be visible, not buried in the console. */
+  showError(message: string): void {
+    if (!this.errorToast) {
+      this.errorToast = document.createElement("div");
+      this.errorToast.id = "error-toast";
+      document.body.appendChild(this.errorToast);
+    }
+    this.errorToast.textContent = `⚠ ${message}`;
+    this.errorToast.classList.add("visible");
+    if (this.errorTimer !== null) clearTimeout(this.errorTimer);
+    this.errorTimer = window.setTimeout(() => {
+      this.errorToast?.classList.remove("visible");
+      this.errorTimer = null;
+    }, 6000);
+    this.addToLog("jarvis", `⚠ ${message}`);
   }
 
   /** Drive the HUD activity state (status bar, panels, overlay theming). */
