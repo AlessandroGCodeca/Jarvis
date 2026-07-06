@@ -115,6 +115,8 @@ the process running `uvicorn`) to control **Calendar**, **Mail**, and **Notes**.
   with `CLAUDE_MODEL`).
 - `tts_module.py` — ElevenLabs streaming TTS → base64 MP3; falls back to `say`
   and returns `None` (frontend shows text only).
+- `stt_module.py` — ElevenLabs Scribe speech-to-text behind `POST /stt`; the
+  Safari voice path records audio in the browser and transcribes it here.
 - `memory.py` — SQLite FTS5 store: `save_memory`, `search_memory`, `get_recent`.
 - `calendar_module.py` / `mail_module.py` / `notes_module.py` — AppleScript
   bridges, each wrapped to fail gracefully.
@@ -172,7 +174,12 @@ restart them with your work session.
 ## Notes & limitations
 
 - Localhost only; no auth, single user — by design (MVP).
-- Web Speech API recognition works best in Chrome/Edge.
+- Voice input works in both Chrome and Safari, via different paths: Chrome/Edge
+  use the Web Speech API (with the "Hey JARVIS" wake word); Safari — where the
+  Web Speech API is unreliable — uses click-to-talk: MediaRecorder captures the
+  command and the backend transcribes it with ElevenLabs Scribe (`POST /stt`,
+  same `ELEVENLABS_API_KEY` as TTS). No wake word in Safari. A text input below
+  the mic works everywhere as a manual fallback.
 - The orb requires WebGL; audio playback requires a user gesture (the mic click
   unlocks the AudioContext).
 - Tool calls run synchronously within the response cycle (no background tasks).

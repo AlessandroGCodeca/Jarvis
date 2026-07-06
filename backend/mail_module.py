@@ -6,6 +6,11 @@ All calls fail gracefully when Mail or automation permission is unavailable.
 import subprocess
 
 
+def _esc(s: str) -> str:
+    """Escape a string for safe interpolation into an AppleScript literal."""
+    return str(s).replace("\\", "\\\\").replace('"', '\\"')
+
+
 def _run_applescript(script: str):
     try:
         result = subprocess.run(
@@ -83,13 +88,14 @@ def get_unread_emails(limit: int = 5):
 
 def send_email(to: str, subject: str, body: str):
     """Compose and send an email through Mail."""
-    safe_subject = subject.replace('"', "'")
-    safe_body = body.replace('"', "'")
+    safe_subject = _esc(subject)
+    safe_body = _esc(body)
+    safe_to = _esc(to)
     script = f'''
     tell application "Mail"
         set newMsg to make new outgoing message with properties {{subject:"{safe_subject}", content:"{safe_body}", visible:false}}
         tell newMsg
-            make new to recipient at end of to recipients with properties {{address:"{to}"}}
+            make new to recipient at end of to recipients with properties {{address:"{safe_to}"}}
             send
         end tell
     end tell

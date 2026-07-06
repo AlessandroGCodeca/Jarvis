@@ -4,12 +4,172 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>JARVIS</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@300;400;500;600&display=swap"
+      rel="stylesheet"
+    />
     <link rel="stylesheet" href="/style.css" />
   </head>
-  <body>
+  <body class="booting">
+    <!-- Boot sequence overlay (Phase 1: darkness + sweeping scan line) -->
+    <div id="boot-overlay"><div class="boot-scan"></div></div>
+
+    <!-- Layer 2: drifting star field -->
+    <canvas id="starfield"></canvas>
+
+    <!-- Layer 3: subtle perspective grid -->
+    <div id="grid"></div>
+
+    <!-- Animated perspective floor grid below the orb (drawn by gridfloor.ts) -->
+    <canvas id="grid-floor" width="600" height="200"></canvas>
+
+    <!-- Orb bloom / outer glow (sits behind the particle orb) -->
+    <div id="orb-glow"></div>
+
+    <!-- The Three.js particle orb -->
     <div id="app">
       <canvas id="orb-canvas"></canvas>
     </div>
+
+    <!-- Arc reactor core glow at the exact centre of the orb -->
+    <div id="arc-core"></div>
+
+    <!-- Layer 4: vignette -->
+    <div id="vignette"></div>
+
+    <!-- Iron Man HUD overlays around the orb -->
+    <div id="hud" aria-hidden="true">
+      <!-- Ring 1 — inner dashed 270° arc with telemetry labels -->
+      <svg class="ring ring-1" viewBox="0 0 540 540">
+        <path
+          class="arc"
+          d="M142.72 397.28 A180 180 0 1 1 397.28 397.28"
+          fill="none"
+        />
+        <circle class="marker" id="marker-net" cx="450" cy="270" r="3" />
+        <circle class="marker" id="marker-mem" cx="270" cy="450" r="3" />
+        <circle class="marker" id="marker-cpu" cx="90" cy="270" r="3" />
+        <circle class="marker" id="marker-sys" cx="270" cy="90" r="3" />
+        <text class="tick" id="tick-sys" x="270" y="80" text-anchor="middle"
+          dominant-baseline="central">SYS</text>
+        <text class="tick" id="tick-net" x="460" y="270" text-anchor="start"
+          dominant-baseline="central">NET</text>
+        <text class="tick" id="tick-mem" x="270" y="460" text-anchor="middle"
+          dominant-baseline="central">MEM</text>
+        <text class="tick" id="tick-cpu" x="80" y="270" text-anchor="end"
+          dominant-baseline="central">CPU</text>
+      </svg>
+
+      <!-- Ring 2 — middle dashed bottom semicircle -->
+      <svg class="ring ring-2" viewBox="0 0 540 540">
+        <path class="arc" d="M490 270 A220 220 0 0 1 50 270" fill="none" />
+      </svg>
+
+      <!-- Ring 3 — faint outer circle with 8 notch marks -->
+      <svg class="ring ring-3" viewBox="0 0 540 540">
+        <circle class="halo" cx="270" cy="270" r="255" fill="none" />
+        <circle class="notches" cx="270" cy="270" r="255" fill="none" />
+      </svg>
+
+      <!-- Targeting-reticle corner brackets -->
+      <span class="bracket bracket-tl"></span>
+      <span class="bracket bracket-tr"></span>
+      <span class="bracket bracket-bl"></span>
+      <span class="bracket bracket-br"></span>
+
+      <!-- Scan line sweeping through the orb -->
+      <div class="scanline"></div>
+    </div>
+
+    <!-- Waveform visualizer (below the orb, above the status bar) -->
+    <canvas id="waveform" width="400" height="48"></canvas>
+
+    <!-- Left tech readout: system status -->
+    <aside id="panel-left" class="hud-panel">
+      <div class="panel-title">JARVIS v2.0</div>
+      <div class="panel-rule"></div>
+      <div class="panel-row clock-row">
+        <span class="k">Time</span><span class="v" id="pl-time">00:00:00</span>
+      </div>
+      <div class="panel-row">
+        <span class="k">Status</span
+        ><span class="v" id="pl-status">Offline</span>
+      </div>
+      <div class="panel-row">
+        <span class="k">Uptime</span><span class="v" id="pl-uptime">00:00:00</span>
+      </div>
+      <div class="panel-row">
+        <span class="k">Session</span
+        ><span class="v" id="pl-session">0 Queries</span>
+      </div>
+      <div class="panel-row">
+        <span class="k">Memory</span
+        ><span class="v"><i class="led"></i>Active</span>
+      </div>
+      <div class="panel-row">
+        <span class="k">Voice</span><span class="v" id="pl-voice">EL Flash v2</span>
+      </div>
+      <div class="panel-row">
+        <span class="k">Model</span><span class="v" id="pl-model">Haiku 4.5</span>
+      </div>
+      <div class="panel-rule"></div>
+      <div class="panel-row">
+        <span class="k">CPU</span
+        ><span class="v"
+          ><span class="statbar"><span class="statbar-fill" id="pl-cpu-bar"></span></span
+          ><span id="pl-cpu-val">—</span></span>
+      </div>
+      <div class="panel-row">
+        <span class="k">RAM</span><span class="v" id="pl-ram">—</span>
+      </div>
+      <div class="panel-row">
+        <span class="k">Disk</span><span class="v" id="pl-disk">—</span>
+      </div>
+      <div class="panel-row">
+        <span class="k">Battery</span><span class="v" id="pl-batt">—</span>
+      </div>
+    </aside>
+
+    <!-- Right tech readout: audio / signal -->
+    <aside id="panel-right" class="hud-panel">
+      <div class="panel-title">Signal Input</div>
+      <div class="panel-rule"></div>
+      <div class="visualizer" id="pr-visualizer">
+        <span></span><span></span><span></span><span></span><span></span
+        ><span></span><span></span><span></span>
+      </div>
+      <div class="panel-rule"></div>
+      <div class="panel-row">
+        <span class="k">Wake Word</span
+        ><span class="v" id="pr-wake">Disabled</span>
+      </div>
+      <div class="panel-rule"></div>
+      <div class="panel-row">
+        <span class="k">Lang</span><span class="v" id="pr-lang">EN</span>
+      </div>
+      <div class="panel-row">
+        <span class="k">TTS</span><span class="v" id="pr-tts">Idle</span>
+      </div>
+    </aside>
+
+    <!-- Full-viewport HUD corner scopes (double L-shapes + data labels) -->
+    <div class="corner-deco cd-tl" aria-hidden="true">
+      <i class="cd-outer"></i><i class="cd-inner"></i>
+      <span class="cd-label">LAT 50.08 / LON 14.43</span>
+    </div>
+    <div class="corner-deco cd-tr" aria-hidden="true">
+      <i class="cd-outer"></i><i class="cd-inner"></i>
+      <span class="cd-label" id="cd-date"></span>
+    </div>
+    <div class="corner-deco cd-bl" aria-hidden="true">
+      <i class="cd-outer"></i><i class="cd-inner"></i>
+    </div>
+    <div class="corner-deco cd-br" aria-hidden="true">
+      <i class="cd-outer"></i><i class="cd-inner"></i>
+    </div>
+
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

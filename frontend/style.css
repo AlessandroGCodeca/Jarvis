@@ -1,13 +1,24 @@
+/* ========================================================================
+   JARVIS — Iron Man HUD aesthetic
+   Holographic cyan, Rajdhani type, animated background + reticle overlays.
+   ===================================================================== */
+
 :root {
-  --bg: #0a0a0f;
   --cyan: #00d4ff;
-  --purple: #7c3aed;
-  --text: #e6e9f0;
-  --muted: #7a8090;
-  --panel: rgba(18, 18, 28, 0.92);
-  --border: rgba(124, 58, 237, 0.35);
-  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
-    "Liberation Mono", monospace;
+  --blue: #0066ff;
+  --orange: #ff6b00;
+  --bg: #00040f;
+  --panel-bg: rgba(0, 20, 50, 0.4);
+  --danger: #ff3333;
+
+  /* State accents */
+  --st-standby: #00d4ff;
+  --st-listening: #00ff88;
+  --st-thinking: #b06bff;
+  --st-speaking: #ffb347;
+  --st-offline: #ff3333;
+
+  font-family: "Rajdhani", "Segoe UI", system-ui, sans-serif;
 }
 
 * {
@@ -20,9 +31,15 @@ body {
   padding: 0;
   width: 100%;
   height: 100%;
-  background: var(--bg);
-  color: var(--text);
+  background: radial-gradient(
+    ellipse at 20% 50%,
+    #000d1a 0%,
+    var(--bg) 60%,
+    #000208 100%
+  );
+  color: var(--cyan);
   overflow: hidden;
+  font-family: "Rajdhani", "Segoe UI", system-ui, sans-serif;
 }
 
 #app {
@@ -31,342 +48,1425 @@ body {
   height: 100vh;
 }
 
+/* ---- Layer 2: star field ---- */
+#starfield {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 0;
+  display: block;
+  pointer-events: none;
+}
+
+/* ---- Layer 3: perspective grid ---- */
+#grid {
+  position: fixed;
+  inset: -20%;
+  z-index: 0;
+  pointer-events: none;
+  background-image:
+    repeating-linear-gradient(
+      0deg,
+      rgba(0, 180, 255, 0.04) 0,
+      rgba(0, 180, 255, 0.04) 1px,
+      transparent 1px,
+      transparent 60px
+    ),
+    repeating-linear-gradient(
+      90deg,
+      rgba(0, 180, 255, 0.04) 0,
+      rgba(0, 180, 255, 0.04) 1px,
+      transparent 1px,
+      transparent 60px
+    );
+  transform: perspective(800px) rotateX(5deg) scale(1.1);
+  transform-origin: center 40%;
+}
+
+/* ---- Animated floor grid below the orb (drawn by gridfloor.ts) ---- */
+#grid-floor {
+  position: fixed;
+  left: 50%;
+  top: calc(50% + 120px); /* spans from roughly the orb's bottom downward */
+  transform: translateX(-50%);
+  width: 600px;
+  height: 200px;
+  z-index: 1; /* behind the orb canvas (z 2) */
+  pointer-events: none;
+  /* Fade out at the edges so the floor dissolves into the background. */
+  -webkit-mask-image: radial-gradient(
+    ellipse at 50% 0%,
+    black 30%,
+    transparent 80%
+  );
+  mask-image: radial-gradient(
+    ellipse at 50% 0%,
+    black 30%,
+    transparent 80%
+  );
+}
+
+/* ---- Orb bloom / glow (behind particles) ---- */
+#orb-glow {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  width: 400px;
+  height: 400px;
+  transform: translate(-50%, -50%);
+  z-index: 1;
+  pointer-events: none;
+  border-radius: 50%;
+  background: radial-gradient(
+    circle,
+    rgba(0, 180, 255, 0.08) 0%,
+    transparent 70%
+  );
+  transition: background 0.5s ease;
+}
+
+body.act-speaking #orb-glow {
+  background: radial-gradient(
+    circle,
+    rgba(0, 180, 255, 0.18) 0%,
+    transparent 70%
+  );
+}
+
+body.act-listening #orb-glow {
+  background: radial-gradient(
+    circle,
+    rgba(0, 255, 136, 0.1) 0%,
+    transparent 70%
+  );
+}
+
 #orb-canvas {
   position: fixed;
   inset: 0;
   width: 100%;
   height: 100%;
   display: block;
+  z-index: 2;
 }
 
-/* ---- Status indicator (top right) ---- */
-#status {
+/* ---- Arc reactor core (bright centre of the orb) ---- */
+#arc-core {
   position: fixed;
-  top: 18px;
-  right: 20px;
-  font-size: 12px;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  color: var(--muted);
-  z-index: 10;
-}
-
-#status .dot {
-  width: 9px;
-  height: 9px;
-  border-radius: 50%;
-  background: #444;
-  box-shadow: 0 0 8px transparent;
-}
-
-#status.connected .dot {
-  background: var(--cyan);
-  box-shadow: 0 0 10px var(--cyan);
-}
-
-#status.disconnected .dot {
-  background: #ff4b6e;
-  box-shadow: 0 0 10px #ff4b6e;
-}
-
-/* ---- Settings button (top left) ---- */
-#settings-btn,
-#log-btn {
-  position: fixed;
-  top: 14px;
-  background: transparent;
-  border: 1px solid var(--border);
-  color: var(--muted);
-  font-family: inherit;
-  font-size: 12px;
-  padding: 7px 12px;
-  border-radius: 8px;
-  cursor: pointer;
-  z-index: 10;
-  transition: color 0.2s, border-color 0.2s;
-}
-
-#settings-btn {
-  left: 20px;
-}
-
-#log-btn {
-  left: 110px;
-}
-
-#settings-btn:hover,
-#log-btn:hover {
-  color: var(--cyan);
-  border-color: var(--cyan);
-}
-
-/* ---- Transcript (center, below orb) ---- */
-#transcript {
-  /* Voice-only: the spoken transcript and reply text are hidden so the screen
-     stays clean. The orb still reacts, and history is available via the log
-     ('L' key). Set this to a block/flex value to bring the text back. */
-  display: none;
-  position: fixed;
+  top: 50%;
   left: 50%;
-  bottom: 160px;
-  transform: translateX(-50%);
-  max-width: 80vw;
-  text-align: center;
-  font-size: 20px;
-  line-height: 1.4;
-  color: var(--text);
-  text-shadow: 0 0 18px rgba(0, 212, 255, 0.25);
-  min-height: 28px;
-  z-index: 10;
+  width: 12px;
+  height: 12px;
+  margin: -6px 0 0 -6px;
+  z-index: 5;
+  pointer-events: none;
+  border-radius: 50%;
+  background: radial-gradient(
+    circle,
+    #ffffff 0%,
+    var(--cyan) 40%,
+    transparent 70%
+  );
+  box-shadow: 0 0 8px 4px rgba(0, 180, 255, 0.8),
+    0 0 20px 8px rgba(0, 100, 255, 0.4);
+  animation: arc-pulse 2s ease-in-out infinite;
+  transition: box-shadow 0.4s ease, background 0.4s ease;
+}
+body.act-speaking #arc-core {
+  box-shadow: 0 0 14px 6px rgba(0, 200, 255, 0.95),
+    0 0 34px 14px rgba(0, 120, 255, 0.6);
+}
+body.act-listening #arc-core {
+  background: radial-gradient(
+    circle,
+    #ffffff 0%,
+    #00ff88 40%,
+    transparent 70%
+  );
+  box-shadow: 0 0 12px 5px rgba(0, 255, 136, 0.85),
+    0 0 26px 10px rgba(0, 200, 120, 0.45);
+}
+
+/* ---- Layer 4: vignette ---- */
+#vignette {
+  position: fixed;
+  inset: 0;
+  z-index: 3;
+  pointer-events: none;
+  box-shadow: inset 0 0 200px rgba(0, 0, 0, 0.8);
+  background: radial-gradient(
+    ellipse at center,
+    transparent 55%,
+    rgba(0, 0, 0, 0.55) 100%
+  );
+}
+
+/* ========================================================================
+   HUD overlays
+   ===================================================================== */
+#hud {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  /* 540 viewBox scaled up to 756px (×1.4) to match the larger orb. */
+  width: 756px;
+  height: 756px;
+  transform: translate(-50%, -50%);
+  z-index: 4;
   pointer-events: none;
 }
 
-#transcript.interim {
-  color: var(--muted);
-  font-style: italic;
+.ring {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  transform-origin: center center;
+  overflow: visible;
 }
 
-/* ---- Mic button (bottom center) ---- */
+.ring .arc {
+  stroke: var(--cyan);
+}
+
+.ring-1 {
+  animation: spin-cw 20s linear infinite;
+}
+.ring-1 .arc {
+  stroke: var(--cyan);
+  stroke-width: 2;
+  stroke-opacity: 0.6;
+  stroke-dasharray: 3 9;
+  stroke-linecap: round;
+}
+.ring-1 .marker {
+  fill: var(--cyan);
+  fill-opacity: 0.8;
+}
+.ring-1 .tick {
+  fill: var(--cyan);
+  fill-opacity: 0.55;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.15em;
+  font-family: "Rajdhani", sans-serif;
+  /* Counter-rotate each label (same 20s, opposite direction) around its own
+     centre so it orbits with the ring but always stays upright/readable. */
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: tick-upright 20s linear infinite;
+}
+
+.ring-2 {
+  animation: spin-ccw 35s linear infinite;
+}
+.ring-2 .arc {
+  stroke: var(--blue);
+  stroke-width: 1;
+  stroke-opacity: 0.4;
+  stroke-dasharray: 4 8;
+}
+
+.ring-3 {
+  animation: ring-pulse 3s ease-in-out infinite;
+}
+.ring-3 .halo {
+  stroke: var(--cyan);
+  stroke-width: 0.5;
+  stroke-opacity: 0.15;
+}
+.ring-3 .notches {
+  stroke: var(--cyan);
+  stroke-width: 2;
+  stroke-opacity: 0.35;
+  stroke-dasharray: 4 196.28;
+}
+
+/* Corner brackets (targeting reticle) framing the orb tightly: their corners
+   sit ~15px outside the orb edge (diagonal radius ≈225px in the 756px hud). */
+.bracket {
+  position: absolute;
+  width: 24px;
+  height: 24px;
+  opacity: 0.5;
+  transition: opacity 0.3s ease, transform 0.3s ease, border-color 0.3s ease;
+}
+.bracket-tl {
+  top: 219px;
+  left: 219px;
+  border-top: 1px solid var(--cyan);
+  border-left: 1px solid var(--cyan);
+}
+.bracket-tr {
+  top: 219px;
+  right: 219px;
+  border-top: 1px solid var(--cyan);
+  border-right: 1px solid var(--cyan);
+}
+.bracket-bl {
+  bottom: 219px;
+  left: 219px;
+  border-bottom: 1px solid var(--cyan);
+  border-left: 1px solid var(--cyan);
+}
+.bracket-br {
+  bottom: 219px;
+  right: 219px;
+  border-bottom: 1px solid var(--cyan);
+  border-right: 1px solid var(--cyan);
+}
+
+/* Listening: brackets brighten + draw inward */
+body.act-listening .bracket {
+  opacity: 1;
+  border-color: var(--st-listening);
+}
+body.act-listening .bracket-tl {
+  transform: translate(8px, 8px);
+}
+body.act-listening .bracket-tr {
+  transform: translate(-8px, 8px);
+}
+body.act-listening .bracket-bl {
+  transform: translate(8px, -8px);
+}
+body.act-listening .bracket-br {
+  transform: translate(-8px, -8px);
+}
+
+/* Thinking: brackets gently pulse */
+body.act-thinking .bracket {
+  animation: bracket-pulse 1.6s ease-in-out infinite;
+}
+
+/* Scan line sweeping through the orb */
+.scanline {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 420px;
+  height: 2px;
+  margin-left: -210px;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    var(--cyan),
+    transparent
+  );
+  opacity: 0.15;
+  animation: scan 3s linear infinite;
+}
+body.act-thinking .scanline {
+  animation-duration: 1.2s;
+}
+
+/* ---- Waveform visualizer (below the orb, above the status bar) ---- */
+#waveform {
+  position: fixed;
+  left: 50%;
+  bottom: 196px;
+  transform: translateX(-50%);
+  width: 400px;
+  height: 48px;
+  z-index: 6;
+  pointer-events: none;
+  background: transparent;
+}
+
+/* ========================================================================
+   Tech readout panels
+   ===================================================================== */
+.hud-panel {
+  position: fixed;
+  top: 50%;
+  width: 140px;
+  background: rgba(0, 15, 35, 0.7);
+  border: 1px solid rgba(0, 180, 255, 0.2);
+  padding: 12px;
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  z-index: 8;
+  font-weight: 300;
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+#panel-left {
+  left: 0;
+  margin-left: 20px;
+  transform: translateY(-50%);
+  border-left: 2px solid var(--cyan);
+  border-radius: 0 4px 4px 0;
+  transition: border-left-color 0.3s ease;
+}
+
+#panel-right {
+  right: 20px;
+  max-width: 160px;
+  overflow: hidden;
+  transform: translateY(-50%);
+  border-right: 2px solid var(--cyan);
+  border-radius: 4px 0 0 4px;
+}
+
+.panel-title {
+  color: var(--cyan);
+  opacity: 0.9;
+  font-weight: 600;
+  font-size: 11px;
+  letter-spacing: 0.18em;
+}
+
+.panel-rule {
+  height: 1px;
+  margin: 8px 0;
+  background: linear-gradient(
+    90deg,
+    rgba(0, 212, 255, 0.4),
+    transparent
+  );
+}
+
+.panel-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 6px;
+  margin: 5px 0;
+}
+
+.panel-row .k {
+  color: var(--cyan);
+  opacity: 0.5;
+}
+
+.panel-row .v {
+  color: var(--cyan);
+  opacity: 0.9;
+  font-weight: 400;
+  text-align: right;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.led {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--cyan);
+  box-shadow: 0 0 8px var(--cyan);
+  animation: led-blink 2s ease-in-out infinite;
+}
+
+/* Tiny usage bar for the CPU stats row (fill width/colour set from JS). */
+.statbar {
+  display: inline-block;
+  width: 34px;
+  height: 4px;
+  background: rgba(0, 180, 255, 0.15);
+  border-radius: 2px;
+  overflow: hidden;
+}
+.statbar-fill {
+  display: block;
+  height: 100%;
+  width: 0%;
+  background: var(--cyan);
+  border-radius: 2px;
+  transition: width 0.6s ease, background 0.6s ease;
+}
+
+/* Mini audio visualizer */
+.visualizer {
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  gap: 2px;
+  height: 22px;
+  padding: 2px 0;
+}
+.visualizer span {
+  width: 3px;
+  height: 2px;
+  background: var(--cyan);
+  opacity: 0.3;
+  border-radius: 1px;
+  transition: opacity 0.2s ease;
+}
+body.act-listening #pr-visualizer span {
+  opacity: 0.9;
+  animation: vbar 0.7s ease-in-out infinite;
+}
+body.act-listening #pr-visualizer span:nth-child(1) {
+  animation-duration: 0.62s;
+}
+body.act-listening #pr-visualizer span:nth-child(2) {
+  animation-duration: 0.8s;
+}
+body.act-listening #pr-visualizer span:nth-child(3) {
+  animation-duration: 0.5s;
+}
+body.act-listening #pr-visualizer span:nth-child(4) {
+  animation-duration: 0.9s;
+}
+body.act-listening #pr-visualizer span:nth-child(5) {
+  animation-duration: 0.66s;
+}
+body.act-listening #pr-visualizer span:nth-child(6) {
+  animation-duration: 0.78s;
+}
+body.act-listening #pr-visualizer span:nth-child(7) {
+  animation-duration: 0.56s;
+}
+body.act-listening #pr-visualizer span:nth-child(8) {
+  animation-duration: 0.84s;
+}
+
+/* Speaking: bars taller and faster. */
+body.act-speaking #pr-visualizer span {
+  opacity: 0.95;
+  animation: vbar-tall 0.4s ease-in-out infinite;
+}
+body.act-speaking #pr-visualizer span:nth-child(1) { animation-duration: 0.32s; }
+body.act-speaking #pr-visualizer span:nth-child(2) { animation-duration: 0.44s; }
+body.act-speaking #pr-visualizer span:nth-child(3) { animation-duration: 0.3s; }
+body.act-speaking #pr-visualizer span:nth-child(4) { animation-duration: 0.48s; }
+body.act-speaking #pr-visualizer span:nth-child(5) { animation-duration: 0.36s; }
+body.act-speaking #pr-visualizer span:nth-child(6) { animation-duration: 0.42s; }
+body.act-speaking #pr-visualizer span:nth-child(7) { animation-duration: 0.34s; }
+body.act-speaking #pr-visualizer span:nth-child(8) { animation-duration: 0.46s; }
+
+/* Thinking: slow left-to-right wave (same duration, staggered delays). */
+body.act-thinking #pr-visualizer span {
+  opacity: 0.7;
+  animation: vwave 1.4s ease-in-out infinite;
+}
+body.act-thinking #pr-visualizer span:nth-child(1) { animation-delay: 0s; }
+body.act-thinking #pr-visualizer span:nth-child(2) { animation-delay: 0.1s; }
+body.act-thinking #pr-visualizer span:nth-child(3) { animation-delay: 0.2s; }
+body.act-thinking #pr-visualizer span:nth-child(4) { animation-delay: 0.3s; }
+body.act-thinking #pr-visualizer span:nth-child(5) { animation-delay: 0.4s; }
+body.act-thinking #pr-visualizer span:nth-child(6) { animation-delay: 0.5s; }
+body.act-thinking #pr-visualizer span:nth-child(7) { animation-delay: 0.6s; }
+body.act-thinking #pr-visualizer span:nth-child(8) { animation-delay: 0.7s; }
+
+/* ---- Reactive panel accents ---- */
+.clock-row .v {
+  font-size: 13px;
+  font-weight: 500;
+  opacity: 1;
+}
+
+/* Left-panel border accent follows the state. */
+body.act-listening #panel-left { border-left-color: var(--st-listening); }
+body.act-thinking #panel-left { border-left-color: var(--st-thinking); }
+body.act-speaking #panel-left { border-left-color: var(--st-speaking); }
+body.act-offline #panel-left { border-left-color: var(--st-offline); }
+
+/* STATUS value flashes white then settles to cyan on each change. */
+#pl-status.flash {
+  animation: val-flash 0.2s ease;
+}
+
+/* VOICE row brightens while speaking. */
+body.act-speaking #pl-voice {
+  animation: voice-pulse 0.8s ease-in-out infinite;
+}
+
+/* TTS row goes green/ACTIVE while speaking. */
+body.act-speaking #pr-tts {
+  color: var(--st-listening);
+  text-shadow: 0 0 6px var(--st-listening);
+}
+
+/* WAKE WORD row flashes when the wake word fires. */
+#pr-wake.flash {
+  animation: wake-flash 0.6s ease;
+}
+
+/* ========================================================================
+   HUD status bar (bottom center)
+   ===================================================================== */
+#status-bar {
+  position: fixed;
+  left: 50%;
+  bottom: 142px;
+  transform: translateX(-50%);
+  width: 320px;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 14px;
+  background: rgba(0, 10, 25, 0.8);
+  border: 1px solid rgba(0, 180, 255, 0.25);
+  border-radius: 3px;
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  box-shadow: 0 0 20px rgba(0, 180, 255, 0.1),
+    inset 0 0 20px rgba(0, 0, 0, 0.5);
+  z-index: 10;
+  font-size: 12px;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+}
+
+/* corner accents — two pseudo-elements, each replicated via box-shadow */
+#status-bar::before,
+#status-bar::after {
+  content: "";
+  position: absolute;
+  width: 4px;
+  height: 4px;
+  background: var(--cyan);
+}
+#status-bar::before {
+  top: -1px;
+  left: -1px;
+  box-shadow: 314px 0 0 var(--cyan);
+}
+#status-bar::after {
+  bottom: -1px;
+  left: -1px;
+  box-shadow: 314px 0 0 var(--cyan);
+}
+
+#status-bar .sb-brand {
+  color: var(--cyan);
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+#status-bar .sb-divider {
+  width: 1px;
+  height: 18px;
+  background: rgba(0, 180, 255, 0.25);
+}
+
+#status-bar .sb-state {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-weight: 400;
+  flex: 1;
+  justify-content: center;
+  white-space: nowrap;
+}
+
+#status-bar .sb-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--st-offline);
+  box-shadow: 0 0 8px var(--st-offline);
+}
+
+/* ---- Mini 5-bar voice waveform (between the state dot and label) ---- */
+#status-bar .sb-wave {
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  height: 10px;
+}
+#status-bar .sb-wave i {
+  display: block;
+  width: 2px;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--st-offline);
+  opacity: 0.3;
+  transition: height 0.2s ease, background 0.2s ease, opacity 0.2s ease;
+}
+body.act-standby #status-bar .sb-wave i {
+  background: var(--st-standby);
+}
+
+/* SPEAKING: fast staggered bounce, 3-10px. */
+body.act-speaking #status-bar .sb-wave i {
+  background: var(--st-speaking);
+  opacity: 0.95;
+  animation: sbw-speak 0.3s ease-in-out infinite;
+}
+body.act-speaking #status-bar .sb-wave i:nth-child(1) { animation-duration: 0.22s; }
+body.act-speaking #status-bar .sb-wave i:nth-child(2) { animation-duration: 0.34s; }
+body.act-speaking #status-bar .sb-wave i:nth-child(3) { animation-duration: 0.26s; }
+body.act-speaking #status-bar .sb-wave i:nth-child(4) { animation-duration: 0.4s; }
+body.act-speaking #status-bar .sb-wave i:nth-child(5) { animation-duration: 0.3s; }
+
+/* LISTENING: slower bounce, 2-7px. */
+body.act-listening #status-bar .sb-wave i {
+  background: var(--st-listening);
+  opacity: 0.9;
+  animation: sbw-listen 0.7s ease-in-out infinite;
+}
+body.act-listening #status-bar .sb-wave i:nth-child(1) { animation-duration: 0.55s; }
+body.act-listening #status-bar .sb-wave i:nth-child(2) { animation-duration: 0.8s; }
+body.act-listening #status-bar .sb-wave i:nth-child(3) { animation-duration: 0.62s; }
+body.act-listening #status-bar .sb-wave i:nth-child(4) { animation-duration: 0.9s; }
+body.act-listening #status-bar .sb-wave i:nth-child(5) { animation-duration: 0.7s; }
+
+/* THINKING: left-to-right wave, 0.6s cycle. */
+body.act-thinking #status-bar .sb-wave i {
+  background: var(--st-thinking);
+  opacity: 0.8;
+  animation: sbw-think 0.6s ease-in-out infinite;
+}
+body.act-thinking #status-bar .sb-wave i:nth-child(1) { animation-delay: 0s; }
+body.act-thinking #status-bar .sb-wave i:nth-child(2) { animation-delay: 0.08s; }
+body.act-thinking #status-bar .sb-wave i:nth-child(3) { animation-delay: 0.16s; }
+body.act-thinking #status-bar .sb-wave i:nth-child(4) { animation-delay: 0.24s; }
+body.act-thinking #status-bar .sb-wave i:nth-child(5) { animation-delay: 0.32s; }
+
+#status-bar .sb-wake {
+  color: var(--cyan);
+  opacity: 0.6;
+  font-size: 10px;
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+  user-select: none;
+  transition: opacity 0.2s ease;
+}
+#status-bar .sb-wake:hover {
+  opacity: 1;
+}
+
+/* State colours (driven by body.act-*) */
+body.act-standby #status-bar .sb-dot {
+  background: var(--st-standby);
+  box-shadow: 0 0 8px var(--st-standby);
+}
+body.act-listening #status-bar .sb-dot {
+  background: var(--st-listening);
+  box-shadow: 0 0 10px var(--st-listening);
+}
+body.act-thinking #status-bar .sb-dot {
+  background: var(--st-thinking);
+  box-shadow: 0 0 10px var(--st-thinking);
+  animation: dot-pulse 1.2s ease-in-out infinite;
+}
+body.act-speaking #status-bar .sb-dot {
+  background: var(--st-speaking);
+  box-shadow: 0 0 10px var(--st-speaking);
+  animation: dot-pulse 0.8s ease-in-out infinite;
+}
+body.act-offline #status-bar .sb-dot {
+  background: var(--st-offline);
+  box-shadow: 0 0 8px var(--st-offline);
+}
+
+/* Hide the wake hint while JARVIS is actively engaged */
+body.act-listening #status-bar .sb-wake,
+body.act-thinking #status-bar .sb-wake,
+body.act-speaking #status-bar .sb-wake {
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* ========================================================================
+   Mic button
+   ===================================================================== */
 #mic-btn {
   position: fixed;
   left: 50%;
   bottom: 48px;
   transform: translateX(-50%);
-  width: 78px;
-  height: 78px;
+  width: 64px;
+  height: 64px;
   border-radius: 50%;
-  border: 2px solid var(--cyan);
-  background: radial-gradient(
-    circle at 50% 40%,
-    rgba(0, 212, 255, 0.18),
-    rgba(10, 10, 15, 0.6)
-  );
+  border: 1.5px solid var(--cyan);
+  background: rgba(0, 20, 50, 0.8);
   color: var(--cyan);
   cursor: pointer;
   z-index: 10;
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: transform 0.15s, box-shadow 0.2s, border-color 0.2s;
-  box-shadow: 0 0 22px rgba(0, 212, 255, 0.25);
+  box-shadow: 0 0 15px rgba(0, 180, 255, 0.3),
+    inset 0 0 10px rgba(0, 0, 0, 0.5);
+  transition: transform 0.15s ease, box-shadow 0.2s ease,
+    border-color 0.2s ease, color 0.2s ease;
+}
+
+#mic-btn svg {
+  width: 26px;
+  height: 26px;
 }
 
 #mic-btn:hover {
   transform: translateX(-50%) scale(1.05);
+  box-shadow: 0 0 25px rgba(0, 180, 255, 0.55),
+    inset 0 0 10px rgba(0, 0, 0, 0.5);
 }
 
 #mic-btn.listening {
-  border-color: var(--purple);
-  color: var(--purple);
-  box-shadow: 0 0 38px rgba(124, 58, 237, 0.6);
-  animation: pulse 1.4s ease-in-out infinite;
+  border-color: var(--st-listening);
+  color: var(--st-listening);
+  box-shadow: 0 0 25px rgba(0, 255, 136, 0.5);
 }
 
-#mic-btn svg {
-  width: 30px;
-  height: 30px;
+/* expanding ring pulse while listening */
+#mic-btn.listening::after {
+  content: "";
+  position: absolute;
+  inset: -2px;
+  border-radius: 50%;
+  border: 1.5px solid var(--st-listening);
+  animation: mic-ring 1s ease-out infinite;
 }
 
-@keyframes pulse {
-  0%,
-  100% {
-    box-shadow: 0 0 26px rgba(124, 58, 237, 0.45);
-  }
-  50% {
-    box-shadow: 0 0 46px rgba(124, 58, 237, 0.85);
-  }
+#mic-btn.speaking {
+  border-color: #00e5ff;
+  color: #00e5ff;
+  box-shadow: 0 0 28px rgba(0, 229, 255, 0.6);
+}
+#mic-btn.speaking::after {
+  content: "";
+  position: absolute;
+  inset: -2px;
+  border-radius: 50%;
+  border: 1.5px solid #00e5ff;
+  animation: mic-ring 0.9s ease-out infinite;
 }
 
-/* ---- Conversation log (bottom panel) ---- */
+/* ========================================================================
+   HUD control buttons (log / fullscreen / overlay)
+   ===================================================================== */
+#log-btn,
+#fullscreen-btn,
+#overlay-btn {
+  position: fixed;
+  top: 16px;
+  background: transparent;
+  border: 1px solid rgba(0, 180, 255, 0.2);
+  color: var(--cyan);
+  opacity: 0.4;
+  font-family: inherit;
+  font-size: 10px;
+  font-weight: 400;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  padding: 4px 10px;
+  border-radius: 2px;
+  cursor: pointer;
+  z-index: 10;
+  transition: opacity 0.2s ease, border-color 0.2s ease,
+    box-shadow 0.2s ease;
+}
+#log-btn {
+  left: 20px;
+}
+#fullscreen-btn {
+  right: 20px;
+}
+#overlay-btn {
+  right: 132px;
+}
+#log-btn:hover,
+#fullscreen-btn:hover,
+#overlay-btn:hover {
+  opacity: 1;
+  border-color: rgba(0, 180, 255, 0.6);
+  box-shadow: 0 0 8px rgba(0, 180, 255, 0.3);
+}
+
+/* ========================================================================
+   Overlay mode (compact floating window — body.overlay)
+   overlay.html is self-contained, but these scoped rules ensure that if the
+   main HUD chrome is ever reused in the overlay it collapses to just the orb.
+   ===================================================================== */
+body.overlay #starfield,
+body.overlay #grid,
+body.overlay #grid-floor,
+body.overlay .corner-deco,
+body.overlay #vignette,
+body.overlay #hud,
+body.overlay #panel-left,
+body.overlay #panel-right,
+body.overlay #waveform,
+body.overlay #log-btn,
+body.overlay #fullscreen-btn,
+body.overlay #overlay-btn,
+body.overlay #log-panel,
+body.overlay #text-input,
+body.overlay #error-toast {
+  display: none !important;
+}
+
+/* ========================================================================
+   Text-input fallback (below the mic; dims until hovered/focused)
+   ===================================================================== */
+#text-input {
+  position: fixed;
+  left: 50%;
+  bottom: 10px;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 6px;
+  width: 320px;
+  z-index: 10;
+  opacity: 0.5;
+  transition: opacity 0.2s ease;
+}
+#text-input:focus-within,
+#text-input:hover {
+  opacity: 1;
+}
+#text-input input {
+  flex: 1;
+  background: rgba(0, 10, 25, 0.8);
+  border: 1px solid rgba(0, 180, 255, 0.25);
+  border-radius: 3px;
+  color: var(--cyan);
+  font-family: inherit;
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  padding: 7px 10px;
+  outline: none;
+}
+#text-input input::placeholder {
+  color: rgba(0, 180, 255, 0.45);
+  text-transform: uppercase;
+  letter-spacing: 0.15em;
+  font-size: 10px;
+}
+#text-input input:focus {
+  border-color: rgba(0, 180, 255, 0.6);
+  box-shadow: 0 0 10px rgba(0, 180, 255, 0.25);
+}
+#text-input button {
+  background: rgba(0, 10, 25, 0.8);
+  border: 1px solid rgba(0, 180, 255, 0.25);
+  border-radius: 3px;
+  color: var(--cyan);
+  cursor: pointer;
+  font-size: 12px;
+  padding: 0 12px;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+#text-input button:hover {
+  border-color: rgba(0, 180, 255, 0.6);
+  box-shadow: 0 0 8px rgba(0, 180, 255, 0.3);
+}
+
+/* ========================================================================
+   Error toast (voice/mic/transcription problems, above the status bar)
+   ===================================================================== */
+#error-toast {
+  position: fixed;
+  left: 50%;
+  bottom: 192px;
+  transform: translateX(-50%);
+  max-width: 70vw;
+  padding: 8px 14px;
+  background: rgba(40, 10, 0, 0.85);
+  border: 1px solid rgba(255, 179, 71, 0.5);
+  border-radius: 3px;
+  color: #ffb347;
+  font-size: 12px;
+  letter-spacing: 0.06em;
+  text-align: center;
+  z-index: 30;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.25s ease;
+}
+#error-toast.visible {
+  opacity: 1;
+}
+
+/* ========================================================================
+   Transcript (kept hidden — voice only)
+   ===================================================================== */
+#transcript {
+  display: none;
+  position: fixed;
+  left: 50%;
+  bottom: 200px;
+  transform: translateX(-50%);
+  max-width: 80vw;
+  text-align: center;
+  font-size: 20px;
+  line-height: 1.4;
+  color: var(--cyan);
+  text-shadow: 0 0 18px rgba(0, 212, 255, 0.35);
+  z-index: 9;
+  pointer-events: none;
+}
+
+/* ========================================================================
+   Conversation log
+   ===================================================================== */
 #log-panel {
   position: fixed;
   left: 0;
   right: 0;
   bottom: 0;
-  max-height: 38vh;
+  max-height: 60vh;
   overflow-y: auto;
-  background: var(--panel);
-  border-top: 1px solid var(--border);
-  padding: 16px 20px 20px;
+  scroll-behavior: smooth;
+  background: rgba(0, 5, 15, 0.92);
+  border-top: 1px solid rgba(0, 180, 255, 0.15);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  padding: 16px;
   z-index: 20;
   display: none;
+  flex-direction: column;
+  gap: 10px;
 }
-
 #log-panel.open {
-  display: block;
+  display: flex;
 }
 
-#log-panel .entry {
-  margin-bottom: 10px;
-  font-size: 14px;
+/* Chat bubbles: user right-aligned, JARVIS left-aligned. */
+#log-panel .bubble {
+  max-width: 75%;
+  padding: 8px 12px;
+  font-family: "Rajdhani", sans-serif;
+  font-weight: 400;
+  font-size: 13px;
   line-height: 1.45;
 }
-
-#log-panel .entry .role {
-  font-size: 11px;
+#log-panel .bubble.user {
+  align-self: flex-end;
+  background: rgba(0, 100, 200, 0.3);
+  border: 1px solid rgba(0, 150, 255, 0.4);
+  border-radius: 12px 12px 2px 12px;
+  color: #ffffff;
+}
+#log-panel .bubble.jarvis {
+  align-self: flex-start;
+  background: rgba(0, 30, 60, 0.5);
+  border: 1px solid rgba(0, 180, 255, 0.2);
+  border-radius: 12px 12px 12px 2px;
+  color: #00d4ff;
+}
+#log-panel .bubble .b-label {
+  display: block;
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.15em;
   text-transform: uppercase;
-  letter-spacing: 0.08em;
-  margin-right: 8px;
-}
-
-#log-panel .entry.user .role {
   color: var(--cyan);
+  opacity: 0.5;
+  margin-bottom: 3px;
+}
+#log-panel .bubble .b-orb {
+  font-style: normal;
+  font-size: 8px;
+}
+#log-panel .bubble .b-time {
+  display: block;
+  font-size: 10px;
+  opacity: 0.4;
+  margin-top: 3px;
+}
+#log-panel .bubble.user .b-time {
+  text-align: right;
+}
+#log-panel .bubble.jarvis .b-time {
+  text-align: left;
 }
 
-#log-panel .entry.jarvis .role {
-  color: var(--purple);
-}
-
-/* ---- Settings panel (modal-ish) ---- */
-#settings-panel {
+/* ========================================================================
+   Full-viewport HUD corner scopes
+   ===================================================================== */
+.corner-deco {
   position: fixed;
-  top: 60px;
-  left: 20px;
-  width: 320px;
-  background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  padding: 18px;
-  z-index: 30;
+  width: 30px;
+  height: 30px;
+  z-index: 7;
+  pointer-events: none;
+}
+.cd-tl { top: 40px; left: 40px; }
+.cd-tr { top: 40px; right: 40px; }
+.cd-bl { bottom: 40px; left: 40px; }
+.cd-br { bottom: 40px; right: 40px; }
+
+/* Two nested L-shapes per corner (borders only on the corner's two sides). */
+.corner-deco i {
+  position: absolute;
+  display: block;
+  border: 0 solid var(--cyan);
+}
+.corner-deco .cd-outer {
+  width: 30px;
+  height: 30px;
+  opacity: 0.15;
+}
+.corner-deco .cd-inner {
+  width: 15px;
+  height: 15px;
+  opacity: 0.3;
+}
+.cd-tl i { top: 0; left: 0; border-top-width: 1px; border-left-width: 1px; }
+.cd-tr i { top: 0; right: 0; border-top-width: 1px; border-right-width: 1px; }
+.cd-bl i { bottom: 0; left: 0; border-bottom-width: 1px; border-left-width: 1px; }
+.cd-br i { bottom: 0; right: 0; border-bottom-width: 1px; border-right-width: 1px; }
+
+/* Data labels next to the top corners. */
+.corner-deco .cd-label {
+  position: absolute;
+  top: 2px;
+  white-space: nowrap;
+  font-size: 9px;
+  font-weight: 400;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  color: var(--cyan);
+  opacity: 0.45;
+}
+.cd-tl .cd-label { left: 38px; }
+.cd-tr .cd-label { right: 38px; }
+
+/* ========================================================================
+   Boot sequence
+   ===================================================================== */
+/* Block all interaction until the boot animation finishes. */
+body.booting {
+  pointer-events: none;
+}
+
+#boot-overlay {
   display: none;
-}
-
-#settings-panel.open {
-  display: block;
-}
-
-#settings-panel h3 {
-  margin: 0 0 12px;
-  font-size: 14px;
-  color: var(--cyan);
-  letter-spacing: 0.06em;
-}
-
-#settings-panel label {
-  display: block;
-  font-size: 11px;
-  color: var(--muted);
-  margin: 10px 0 4px;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-}
-
-#settings-panel input {
-  width: 100%;
-  background: #0d0d14;
-  border: 1px solid var(--border);
-  color: var(--text);
-  font-family: inherit;
-  font-size: 13px;
-  padding: 8px;
-  border-radius: 6px;
-}
-
-#settings-panel .note {
-  font-size: 11px;
-  color: var(--muted);
-  margin-top: 12px;
-  line-height: 1.4;
-}
-
-#settings-panel button {
-  margin-top: 14px;
-  width: 100%;
-  background: var(--purple);
-  border: none;
-  color: white;
-  font-family: inherit;
-  font-size: 13px;
-  padding: 9px;
-  border-radius: 6px;
-  cursor: pointer;
-}
-
-#settings-panel button:hover {
-  filter: brightness(1.15);
-}
-
-/* ---- Wake-word indicator (bottom left) ---- */
-#wake-indicator {
   position: fixed;
-  bottom: 20px;
-  left: 20px;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 12px;
-  letter-spacing: 0.04em;
-  color: var(--muted);
-  background: rgba(18, 18, 28, 0.6);
-  border: 1px solid var(--border);
-  border-radius: 20px;
-  padding: 7px 14px;
-  cursor: pointer;
-  user-select: none;
-  z-index: 10;
-  transition: color 0.2s, border-color 0.2s;
+  inset: 0;
+  z-index: 1000;
+  background: #000208;
+  pointer-events: none;
+}
+body.booting #boot-overlay {
+  display: block;
+  opacity: 1;
+  animation: boot-overlay-out 0.4s ease 0.4s forwards;
+}
+#boot-overlay .boot-scan {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  height: 2px;
+  background: linear-gradient(90deg, transparent, var(--cyan), transparent);
+  box-shadow: 0 0 14px var(--cyan);
+  opacity: 0;
+}
+body.booting #boot-overlay .boot-scan {
+  animation: boot-scan 0.4s linear forwards;
 }
 
-#wake-indicator:hover {
-  color: var(--text);
+/* Phase 2 — panels slide in (left, then right) and flicker in phase 5. */
+body.booting #panel-left {
+  animation: boot-panel-left 0.6s ease 0.5s both,
+    boot-flicker 0.5s linear 1.8s;
+}
+body.booting #panel-right {
+  animation: boot-panel-right 0.6s ease 0.6s both,
+    boot-flicker 0.5s linear 1.9s;
 }
 
-#wake-indicator .dot {
-  width: 9px;
-  height: 9px;
-  border-radius: 50%;
-  background: #555;
-  box-shadow: 0 0 8px transparent;
-  transition: background 0.2s, box-shadow 0.2s;
+/* Phase 3 — rings + brackets spin up from scale 0. */
+body.booting #hud {
+  animation: boot-hud 0.5s cubic-bezier(0.2, 0.8, 0.2, 1) 0.8s both;
 }
 
-#wake-indicator.active {
-  color: var(--text);
-  border-color: rgba(0, 212, 255, 0.5);
+/* Phase 4 — orb materializes; glow, core and waveform fade in. */
+body.booting #orb-canvas {
+  animation: boot-orb 0.6s ease 1.2s both;
+}
+body.booting #orb-glow,
+body.booting #waveform {
+  animation: boot-fade 0.6s ease 1.2s both;
+}
+body.booting #arc-core {
+  animation: arc-pulse 2s ease-in-out 1.8s infinite,
+    boot-fade 0.6s ease 1.2s both;
+}
+body.booting #status-bar {
+  animation: boot-statusbar 0.5s ease 1.4s both;
 }
 
-#wake-indicator.active .dot {
-  background: #34d36b;
-  box-shadow: 0 0 10px #34d36b;
-  animation: wake-pulse 1.8s ease-in-out infinite;
+/* ========================================================================
+   Responsive — hide side panels on narrow screens
+   ===================================================================== */
+@media (max-width: 900px) {
+  #panel-left,
+  #panel-right {
+    display: none;
+  }
 }
 
-#wake-indicator.session {
-  color: var(--text);
-  border-color: rgba(0, 212, 255, 0.7);
-  background: rgba(0, 212, 255, 0.1);
+/* ========================================================================
+   Keyframes
+   ===================================================================== */
+@keyframes spin-cw {
+  to {
+    transform: rotate(360deg);
+  }
 }
-
-#wake-indicator.session .dot {
-  background: var(--cyan);
-  box-shadow: 0 0 12px var(--cyan);
-  animation: wake-pulse-cyan 1.2s ease-in-out infinite;
+@keyframes spin-ccw {
+  to {
+    transform: rotate(-360deg);
+  }
 }
-
-#wake-indicator.unsupported {
-  cursor: default;
-  opacity: 0.6;
+/* Cancels ring-1's clockwise spin so labels stay upright (same 20s). */
+@keyframes tick-upright {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(-360deg);
+  }
 }
-
-@keyframes wake-pulse-cyan {
+@keyframes ring-pulse {
   0%,
   100% {
-    box-shadow: 0 0 6px var(--cyan);
+    opacity: 0.5;
   }
   50% {
-    box-shadow: 0 0 16px var(--cyan);
+    opacity: 1;
+  }
+}
+@keyframes bracket-pulse {
+  0%,
+  100% {
+    opacity: 0.4;
+  }
+  50% {
+    opacity: 0.9;
+  }
+}
+@keyframes scan {
+  0% {
+    transform: translateY(-210px);
+  }
+  100% {
+    transform: translateY(210px);
+  }
+}
+@keyframes vbar {
+  0%,
+  100% {
+    height: 3px;
+  }
+  50% {
+    height: 18px;
+  }
+}
+/* Status-bar mini waveform */
+@keyframes sbw-speak {
+  0%,
+  100% {
+    height: 3px;
+  }
+  50% {
+    height: 10px;
+  }
+}
+@keyframes sbw-listen {
+  0%,
+  100% {
+    height: 2px;
+  }
+  50% {
+    height: 7px;
+  }
+}
+@keyframes sbw-think {
+  0%,
+  100% {
+    height: 2px;
+  }
+  50% {
+    height: 8px;
+  }
+}
+@keyframes led-blink {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.4;
+  }
+}
+@keyframes dot-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.4;
+  }
+}
+@keyframes mic-ring {
+  0% {
+    transform: scale(1);
+    opacity: 0.6;
+  }
+  100% {
+    transform: scale(1.5);
+    opacity: 0;
+  }
+}
+@keyframes vbar-tall {
+  0%,
+  100% {
+    height: 4px;
+  }
+  50% {
+    height: 24px;
+  }
+}
+@keyframes vwave {
+  0%,
+  100% {
+    height: 3px;
+  }
+  50% {
+    height: 14px;
+  }
+}
+@keyframes arc-pulse {
+  0%,
+  100% {
+    opacity: 0.7;
+    transform: scale(0.9);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.1);
+  }
+}
+@keyframes val-flash {
+  0% {
+    color: #ffffff;
+    text-shadow: 0 0 8px #ffffff;
+  }
+  100% {
+    color: var(--cyan);
+    text-shadow: none;
+  }
+}
+@keyframes voice-pulse {
+  0%,
+  100% {
+    opacity: 0.9;
+  }
+  50% {
+    opacity: 1;
+    text-shadow: 0 0 8px var(--cyan);
+  }
+}
+@keyframes wake-flash {
+  0%,
+  100% {
+    color: var(--cyan);
+  }
+  50% {
+    color: #ffffff;
+    text-shadow: 0 0 8px #ffffff;
   }
 }
 
-@keyframes wake-pulse {
+/* ---- Boot sequence keyframes ---- */
+@keyframes boot-scan {
+  0% {
+    top: 0;
+    opacity: 1;
+  }
+  100% {
+    top: 100%;
+    opacity: 1;
+  }
+}
+@keyframes boot-overlay-out {
+  to {
+    opacity: 0;
+  }
+}
+@keyframes boot-panel-left {
+  from {
+    opacity: 0;
+    transform: translateY(-50%) translateX(-100%);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(-50%) translateX(0);
+  }
+}
+@keyframes boot-panel-right {
+  from {
+    opacity: 0;
+    transform: translateY(-50%) translateX(100%);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(-50%) translateX(0);
+  }
+}
+@keyframes boot-hud {
+  from {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(0) rotate(-60deg);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1) rotate(0);
+  }
+}
+@keyframes boot-orb {
+  from {
+    opacity: 0;
+    transform: scale(0.3);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+@keyframes boot-fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@keyframes boot-statusbar {
+  from {
+    opacity: 0;
+    transform: translateX(-50%) translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+  }
+}
+@keyframes boot-flicker {
   0%,
   100% {
-    box-shadow: 0 0 6px #34d36b;
+    opacity: 1;
   }
-  50% {
-    box-shadow: 0 0 14px #34d36b;
+  12% {
+    opacity: 0.3;
+  }
+  24% {
+    opacity: 1;
+  }
+  40% {
+    opacity: 0.4;
+  }
+  52% {
+    opacity: 1;
+  }
+  68% {
+    opacity: 0.3;
+  }
+  80% {
+    opacity: 1;
   }
 }

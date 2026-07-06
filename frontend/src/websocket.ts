@@ -1,7 +1,8 @@
 import type { OrbVisualizer } from "./orb";
 
 interface ResponseMessage {
-  type: "response";
+  // "response" = reply to the user; "proactive" = server-initiated (idle mood).
+  type: "response" | "proactive";
   text: string;
 }
 
@@ -18,8 +19,13 @@ export class WSClient {
   private ws: WebSocket | null = null;
   private connected = false;
   private reconnectAttempts = 0;
-  private readonly maxReconnect = 5;
   private pingTimer: number | null = null;
+
+  // Per-turn generation counter. Bumped when a new message is sent or playback
+  // is interrupted, so late-arriving audio for a stale turn is discarded.
+  private gen = 0;
+  // Serializes async audio decoding so chunks play in arrival order.
+  private decodeChain: Promise<void> = Promise.resolve();
 
   private orb: OrbVisualizer | null = null;
   private responseCb: (msg: { text: string }) => void = () => {};
@@ -34,6 +40,8 @@ export class WSClient {
   /** Give the client the orb so it can play audio + drive states. */
   attachOrb(orb: OrbVisualizer): void {
     this.orb = orb;
+    // The turn ends when the orb finishes playing all of this turn's audio.
+    orb.setPlaybackCompleteHandler(() => this.turnEndCb());
   }
 
   private connect(): void {
@@ -71,11 +79,9 @@ export class WSClient {
   }
 
   private scheduleReconnect(): void {
-    if (this.reconnectAttempts >= this.maxReconnect) {
-      console.warn("Max reconnect attempts reached.");
-      return;
-    }
-    const delay = Math.min(1000 * 2 ** this.reconnectAttempts, 16000);
+    // Keep retrying forever — this is an always-on assistant. Exponential
+    // backoff, capped at 30s between attempts.
+    const delay = Math.min(1000 * 2 ** this.reconnectAttempts, 30000);
     this.reconnectAttempts += 1;
     setTimeout(() => this.connect(), delay);
   }
@@ -107,47 +113,64 @@ export class WSClient {
     if (data.type === "pong") return;
 
     // Text arrives first (before TTS) so the UI can react immediately.
-    if (data.type === "response") {
+    // "proactive" (idle-mood phrases) follows the same display+audio path.
+    if (data.type === "response" || data.type === "proactive") {
       const msg = data as ResponseMessage;
       this.responseCb({ text: msg.text });
       return;
     }
 
-    // Audio arrives as a follow-up; playing it (or not) ends the turn.
+    // Audio chunks arrive one sentence at a time. Decode them on a serialized
+    // chain so they're enqueued in arrival order, and tag each with the current
+    // generation so a barge-in / new turn discards stale chunks.
     if (data.type === "audio") {
       const audio = data.audio as string | null | undefined;
       if (audio && this.orb) {
-        try {
-          await this.playBase64Audio(audio);
-        } catch (err) {
-          console.warn("Audio playback failed:", err);
-          this.orb.setState("idle");
-        }
-      } else {
-        // No audio (TTS fell back to local `say` or failed) — settle the orb.
-        this.orb?.setState("idle");
+        const myGen = this.gen;
+        this.decodeChain = this.decodeChain.then(async () => {
+          if (myGen !== this.gen || !this.orb) return;
+          try {
+            const buffer = await this.decodeBase64Audio(audio);
+            if (myGen !== this.gen || !this.orb) return;
+            this.orb.enqueueAudio(buffer);
+          } catch (err) {
+            console.warn("Audio decode failed:", err);
+          }
+        });
       }
-      this.turnEndCb();
+      return;
+    }
+
+    // End of this turn's audio stream — mark it after pending decodes resolve.
+    if (data.type === "audio_end") {
+      const myGen = this.gen;
+      this.decodeChain = this.decodeChain.then(() => {
+        if (myGen !== this.gen || !this.orb) return;
+        this.orb.markAudioStreamEnd();
+      });
       return;
     }
 
     if (data.type === "error") {
       console.warn("Server error:", data.message);
-      this.orb?.setState("idle");
+      this.stopPlayback(); // invalidate any in-flight audio for this turn
       this.turnEndCb();
     }
   }
 
-  /** Decode base64 MP3 → AudioBuffer (in the orb's context) → play. */
-  private async playBase64Audio(b64: string): Promise<void> {
-    if (!this.orb) return;
+  /** Decode base64 MP3 → AudioBuffer in the orb's shared AudioContext. */
+  private async decodeBase64Audio(b64: string): Promise<AudioBuffer> {
+    if (!this.orb) throw new Error("orb not attached");
     const binary = atob(b64);
     const bytes = new Uint8Array(binary.length);
     for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    return this.orb.audioContext.decodeAudioData(bytes.buffer);
+  }
 
-    const ctx = this.orb.audioContext;
-    const buffer = await ctx.decodeAudioData(bytes.buffer);
-    this.orb.playAudioBuffer(buffer);
+  /** Stop current playback + discard queued/in-flight audio (barge-in). */
+  stopPlayback(): void {
+    this.gen += 1; // invalidate any pending decodes / audio_end for this turn
+    this.orb?.stopPlayback();
   }
 
   /** Send a user message and flip the orb into the "thinking" state. */
@@ -156,6 +179,7 @@ export class WSClient {
       console.warn("Not connected; message dropped.");
       return;
     }
+    this.gen += 1; // new turn
     this.orb?.setState("thinking");
     this.ws.send(JSON.stringify({ type: "message", content: text }));
   }
