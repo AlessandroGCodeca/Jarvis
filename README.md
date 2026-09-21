@@ -137,6 +137,33 @@ Frontend (`frontend/src/`):
 
 ---
 
+## Tests
+
+```bash
+cd backend
+venv/bin/pip install -r requirements-dev.txt
+venv/bin/python -m pytest
+```
+
+370 tests covering the pure-logic backend: date/time parsing, the FTS5 memory
+store, language detection, currency conversion, preferences, habits, tasks, the
+offline helpers, and `JarvisBrain`'s formatters and tool dispatch. They run in
+a few seconds and need no API key, no network and no macOS.
+
+**Safe to run on the Mac that JARVIS actually uses.** Three autouse fixtures in
+`tests/conftest.py` make sure of it:
+
+- the SQLite store and `user_preferences.json` are redirected into a temp
+  directory, so your real memory and settings are untouched;
+- every `osascript` call is blocked and degrades exactly as it does off-macOS,
+  so no test can write to Calendar, Reminders, Notes, Mail or Messages;
+- any unmocked HTTP call fails the test instead of reaching the network.
+
+The AppleScript bridges themselves are only covered at the dispatch boundary —
+verifying their AppleScript would mean driving the real apps.
+
+---
+
 ## Troubleshooting
 
 ### Backend starts but never binds port 8000 (silent uvicorn)
