@@ -38,18 +38,28 @@ class _ToolUseBlock:
         self.input = tool_input or {}
 
 
+class _Usage:
+    def __init__(self, uncached=0, cache_read=0, cache_write=0, output=0):
+        self.input_tokens = uncached
+        self.cache_read_input_tokens = cache_read
+        self.cache_creation_input_tokens = cache_write
+        self.output_tokens = output
+
+
 class _Response:
-    def __init__(self, content, stop_reason):
+    def __init__(self, content, stop_reason, usage=None):
         self.content = content
         self.stop_reason = stop_reason
+        if usage is not None:
+            self.usage = usage
 
 
-def _final(text):
-    return _Response([_TextBlock(text)], "end_turn")
+def _final(text, usage=None):
+    return _Response([_TextBlock(text)], "end_turn", usage)
 
 
-def _tool_turn(*blocks):
-    return _Response(list(blocks), "tool_use")
+def _tool_turn(*blocks, usage=None):
+    return _Response(list(blocks), "tool_use", usage)
 
 
 class _RecordingClient:
@@ -213,3 +223,83 @@ def test_the_configured_model_is_the_one_used(brain_with):
     brain, client = brain_with(_final("hi"))
     brain.process("hello")
     assert client.requests[0]["model"] == claude_client.MODEL
+
+
+# --- token usage reporting --------------------------------------------------
+
+
+def test_a_turn_reports_its_token_usage(brain_with, capsys):
+    """Without this line there is no way to tell whether the cached prefix is
+    being hit — a silent invalidation looks exactly like a working cache."""
+    brain, _ = brain_with(
+        _final("hi", usage=_Usage(uncached=412, cache_read=6013, output=87))
+    )
+    brain.process("hello")
+    out = capsys.readouterr().out
+    assert "cache read 6,013" in out
+    assert "in 412" in out
+    assert "out 87" in out
+    assert "1 call" in out
+
+
+def test_usage_is_summed_across_the_hops_of_a_tool_turn(brain_with, monkeypatch, capsys):
+    """Each hop re-sends the whole prefix, so per-call numbers mislead."""
+    brain, _ = brain_with(
+        _tool_turn(_ToolUseBlock("get_calendar", "tu1"), usage=_Usage(uncached=100, cache_read=6000, output=20)),
+        _final("done", usage=_Usage(uncached=150, cache_read=6000, output=30)),
+    )
+    monkeypatch.setattr(brain, "_execute_tool", lambda name, inp: "ok")
+    brain.process("what's on today")
+    out = capsys.readouterr().out
+    assert "2 calls" in out
+    assert "in 250" in out          # 100 + 150
+    assert "cache read 12,000" in out  # 6000 + 6000
+    assert "out 50" in out          # 20 + 30
+
+
+def test_the_first_turn_shows_a_cache_write(brain_with, capsys):
+    """Writing the cache is what the first turn does; reads start after."""
+    brain, _ = brain_with(
+        _final("hi", usage=_Usage(uncached=400, cache_write=6013, output=20))
+    )
+    brain.process("hello")
+    out = capsys.readouterr().out
+    assert "cache write 6,013" in out
+    assert "cache read 0 (0%)" in out
+
+
+def test_the_reported_percentage_is_the_share_served_from_cache(brain_with, capsys):
+    brain, _ = brain_with(
+        _final("hi", usage=_Usage(uncached=1000, cache_read=9000, output=10))
+    )
+    brain.process("hello")
+    assert "(90%)" in capsys.readouterr().out
+
+
+def test_usage_reporting_can_be_silenced(brain_with, monkeypatch, capsys):
+    monkeypatch.setenv("JARVIS_QUIET_USAGE", "1")
+    brain, _ = brain_with(_final("hi", usage=_Usage(uncached=1, cache_read=2)))
+    brain.process("hello")
+    assert capsys.readouterr().out == ""
+
+
+def test_a_response_without_usage_prints_nothing(brain_with, capsys):
+    """Older SDKs or a stubbed client may not carry usage; that must not raise."""
+    brain, _ = brain_with(_final("hi"))
+    brain.process("hello")
+    assert capsys.readouterr().out == ""
+
+
+def test_usage_survives_the_tool_loop_running_out(brain_with, monkeypatch, capsys):
+    """The safety-net exit reports too, so a runaway turn still shows its cost."""
+    blocks = [_ToolUseBlock("get_calendar", "tu1")]
+    brain, _ = brain_with(
+        *[_tool_turn(*blocks, usage=_Usage(uncached=10, cache_read=100, output=5))
+          for _ in range(8)]
+    )
+    monkeypatch.setattr(brain, "_execute_tool", lambda name, inp: "ok")
+    reply = brain.process("loop forever")
+    assert "rephrase" in reply
+    out = capsys.readouterr().out
+    assert "8 calls" in out
+    assert "cache read 800" in out
