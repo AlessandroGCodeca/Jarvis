@@ -210,6 +210,19 @@ a few seconds and need no API key, no network and no macOS.
 The AppleScript bridges themselves are only covered at the dispatch boundary —
 verifying their AppleScript would mean driving the real apps.
 
+### Continuous integration
+
+`.github/workflows/ci.yml` runs on every pull request and push to `main`:
+
+- **backend** — the suite on Python 3.11 / 3.12 / 3.13 (Ubuntu) and 3.12
+  (macOS), installed from `requirements-dev.txt`;
+- **frontend** — `npm ci` then `npm run build` (which is `tsc && vite build`,
+  so a type error fails the build).
+
+The macOS leg is the one that matters most: `osascript` and `shortcuts` really
+do exist there, so it proves the conftest guards hold on the platform JARVIS
+actually runs on rather than only where those binaries are missing.
+
 ---
 
 ## Troubleshooting
