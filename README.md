@@ -104,6 +104,34 @@ the process running `uvicorn`) to control **Calendar**, **Mail**, and **Notes**.
 
 ---
 
+## Smart home (HomeKit)
+
+macOS's Home app has no AppleScript dictionary — there is no
+`tell application "Home"`. The supported native route is the **Shortcuts**
+app, so JARVIS controls HomeKit by running shortcuts you create:
+
+1. Open **Shortcuts** and create a shortcut per scene or accessory you want by
+   voice. Add a Home action (a scene, or **Control My Home** for a single
+   accessory) and name the shortcut the way you'd say it out loud —
+   *Good Night*, *Living Room Lights*, *Movie Time*.
+2. Put them in a folder called **Home** (New Folder in the sidebar). JARVIS
+   only lists that folder, so the rest of your shortcuts stay out of the way.
+   Rename it via the `home_shortcuts_folder` preference — *"set my home
+   shortcuts folder to Smart Home"*. No folder? It falls back to every
+   shortcut.
+3. Say *"what can you control?"* to hear the list, then *"run Good Night"* or
+   just *"lights"* — names are matched loosely, and an ambiguous one is read
+   back rather than guessed at.
+
+Requires **macOS 12 Monterey or later** (for the `shortcuts` CLI). Verify it
+yourself with `shortcuts list -f Home`.
+
+**Locks, doors, garages, gates and alarms need confirmation.** JARVIS reads
+the action back and waits for a spoken yes before running it, so a misheard
+command can't unlock your front door. Everything else runs immediately.
+
+---
+
 ## How it works
 
 - `main.py` — FastAPI app + `/ws` WebSocket. Accepts `{type:"message", content}`
@@ -123,6 +151,7 @@ the process running `uvicorn`) to control **Calendar**, **Mail**, and **Notes**.
 - `browser_module.py` — DuckDuckGo HTML search + stdlib HTML-to-text fetch
   (no extra dependencies).
 - `system_actions.py` — `run_command` (10s timeout) and `open_app`.
+- `home_module.py` — HomeKit control through the Shortcuts CLI (`shortcuts run`), with loose name matching and a confirmation gate on locks, doors and alarms. See Smart home below.
 
 Frontend (`frontend/src/`):
 
@@ -145,9 +174,10 @@ venv/bin/pip install -r requirements-dev.txt
 venv/bin/python -m pytest
 ```
 
-370 tests covering the pure-logic backend: date/time parsing, the FTS5 memory
+432 tests covering the pure-logic backend: date/time parsing, the FTS5 memory
 store, language detection, currency conversion, preferences, habits, tasks, the
-offline helpers, and `JarvisBrain`'s formatters and tool dispatch. They run in
+offline helpers, home control, and `JarvisBrain`'s formatters and tool
+dispatch. They run in
 a few seconds and need no API key, no network and no macOS.
 
 **Safe to run on the Mac that JARVIS actually uses.** Three autouse fixtures in
@@ -155,8 +185,9 @@ a few seconds and need no API key, no network and no macOS.
 
 - the SQLite store and `user_preferences.json` are redirected into a temp
   directory, so your real memory and settings are untouched;
-- every `osascript` call is blocked and degrades exactly as it does off-macOS,
-  so no test can write to Calendar, Reminders, Notes, Mail or Messages;
+- every `osascript` and `shortcuts` call is blocked and degrades exactly as it
+  does off-macOS, so no test can write to Calendar, Reminders, Notes, Mail or
+  Messages, or switch a real light or lock;
 - any unmocked HTTP call fails the test instead of reaching the network.
 
 The AppleScript bridges themselves are only covered at the dispatch boundary —
