@@ -11,6 +11,13 @@ import time
 
 DB_PATH = os.path.join(os.path.dirname(__file__), "jarvis_memory.db")
 
+# Every exchange is saved as a "conversation" memory, so the store grows for as
+# long as JARVIS is used. Beyond disk, an FTS index full of years of small talk
+# crowds out the things worth recalling. Conversations age out after a season;
+# explicit notes and learned corrections are kept forever.
+CONVERSATION_RETENTION_DAYS = 90
+PRUNABLE_TAGS = ("conversation",)
+
 _initialized = False
 
 
@@ -104,6 +111,39 @@ def get_recent(n: int = 10):
             (n,),
         ).fetchall()
         return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def prune_old_memories(
+    days: int = CONVERSATION_RETENTION_DAYS, tags=PRUNABLE_TAGS
+) -> int:
+    """Delete conversation memories older than ``days``; return how many went.
+
+    Only the tags in ``tags`` are eligible — notes and corrections are never
+    pruned, however old. Called once at server startup; safe to call again.
+    """
+    if not tags or days is None or days < 0:
+        return 0
+    cutoff = time.time() - days * 86400
+    _ensure_init()
+    conn = _connect()
+    try:
+        placeholders = ",".join("?" for _ in tags)
+        # timestamp is stored as TEXT and UNINDEXED, so compare numerically.
+        removed = conn.execute(
+            f"DELETE FROM memories WHERE tag IN ({placeholders}) "
+            "AND CAST(timestamp AS REAL) < ?",
+            (*tags, cutoff),
+        ).rowcount
+        conn.commit()
+        if removed:
+            # Compact the FTS index after a bulk delete.
+            conn.execute("INSERT INTO memories(memories) VALUES('optimize')")
+            conn.commit()
+        return max(removed, 0)
+    except sqlite3.OperationalError:
+        return 0  # pruning is housekeeping; never break startup over it
     finally:
         conn.close()
 

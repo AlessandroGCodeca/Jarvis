@@ -9,6 +9,8 @@ human requires explicit confirmation.
 
 import pytest
 
+import threading
+
 import calendar_module
 import claude_client
 import home_module
@@ -296,33 +298,196 @@ def test_internet_tools_run_normally_when_online(brain, monkeypatch):
     assert "hit" in brain._execute_tool("search_web", {"query": "python"})
 
 
+# --- parallel tool execution ------------------------------------------------
+
+
+class _ToolBlock:
+    """Minimal stand-in for the SDK's tool_use content block."""
+
+    type = "tool_use"
+
+    def __init__(self, name, tool_input=None, block_id=None):
+        self.name = name
+        self.input = tool_input or {}
+        self.id = block_id or f"tu_{name}"
+
+
+def test_results_come_back_in_request_order(brain, monkeypatch):
+    """tool_result blocks are matched to tool_use ids by position."""
+    monkeypatch.setattr(
+        brain, "_execute_tool", lambda name, inp: f"result of {name}"
+    )
+    blocks = [_ToolBlock(f"tool_{i}") for i in range(4)]
+    assert brain._execute_tools(blocks) == [f"result of tool_{i}" for i in range(4)]
+
+
+def test_several_tools_really_do_run_at_the_same_time(brain, monkeypatch):
+    """The barrier only releases once all three are in flight together — if
+    execution were sequential the first would wait there until it times out."""
+    barrier = threading.Barrier(3, timeout=5)
+
+    def gated(name, inp):
+        barrier.wait()
+        return f"ran {name}"
+
+    monkeypatch.setattr(brain, "_execute_tool", gated)
+    blocks = [_ToolBlock("a"), _ToolBlock("b"), _ToolBlock("c")]
+    assert brain._execute_tools(blocks) == ["ran a", "ran b", "ran c"]
+
+
+def test_a_single_tool_runs_inline(brain, monkeypatch):
+    """No thread pool for the common one-tool turn."""
+    seen = []
+    monkeypatch.setattr(
+        brain,
+        "_execute_tool",
+        lambda name, inp: seen.append(threading.current_thread().name) or "ok",
+    )
+    brain._execute_tools([_ToolBlock("only")])
+    assert seen == [threading.current_thread().name]
+
+
+def test_no_tools_is_an_empty_result(brain):
+    assert brain._execute_tools([]) == []
+
+
+def test_one_failing_tool_does_not_take_down_the_others(brain, monkeypatch):
+    real = brain._execute_tool
+
+    def sometimes_explodes(name, inp):
+        if name == "get_calendar":
+            raise RuntimeError("bridge died")
+        return "fine"
+
+    monkeypatch.setattr(brain, "_execute_tool", sometimes_explodes)
+    blocks = [_ToolBlock("get_emails"), _ToolBlock("get_calendar")]
+    with pytest.raises(RuntimeError):
+        brain._execute_tools(blocks)
+    # ...but through the real dispatcher, the failure is already text:
+    monkeypatch.setattr(brain, "_execute_tool", real)
+    monkeypatch.setattr(
+        calendar_module, "get_today_events", lambda: (_ for _ in ()).throw(
+            RuntimeError("bridge died")
+        )
+    )
+    results = brain._execute_tools(
+        [_ToolBlock("get_calendar", {"range": "today"}), _ToolBlock("unknown_tool")]
+    )
+    assert "failed" in results[0]
+    assert results[1] == "Unknown tool: unknown_tool"
+
+
+def test_concurrency_is_bounded(brain, monkeypatch):
+    """A turn with many tool calls must not spawn an unbounded thread pool."""
+    live = []
+    peak = []
+    lock = threading.Lock()
+
+    def tracked(name, inp):
+        with lock:
+            live.append(name)
+            peak.append(len(live))
+        threading.Event().wait(0.01)
+        with lock:
+            live.remove(name)
+        return "ok"
+
+    monkeypatch.setattr(brain, "_execute_tool", tracked)
+    brain._execute_tools([_ToolBlock(f"t{i}") for i in range(12)])
+    assert max(peak) <= claude_client.MAX_PARALLEL_TOOLS
+
+
 # --- history trimming -------------------------------------------------------
 
 
+def _turn(text):
+    return {"role": "user", "content": text}
+
+
+def _tool_exchange(n=1):
+    """One assistant tool_use turn plus its tool_result reply."""
+    return [
+        {"role": "assistant", "content": [{"type": "tool_use"}] * n},
+        {"role": "user", "content": [{"type": "tool_result"}] * n},
+    ]
+
+
 def test_history_under_the_cap_is_left_alone(brain):
-    brain.history = [{"role": "user", "content": f"msg {i}"} for i in range(5)]
+    brain.history = [_turn(f"msg {i}") for i in range(5)]
     brain._trim()
     assert len(brain.history) == 5
 
 
-def test_history_is_capped(brain):
-    brain.history = [
-        {"role": "user", "content": f"msg {i}"}
-        for i in range(claude_client.MAX_HISTORY + 10)
-    ]
+def test_history_is_capped_by_conversational_turns(brain):
+    brain.history = [_turn(f"msg {i}") for i in range(claude_client.MAX_TURNS + 10)]
     brain._trim()
-    assert len(brain.history) <= claude_client.MAX_HISTORY
+    assert len(brain.history) == claude_client.MAX_TURNS
+    assert brain.history[0]["content"] == "msg 10"
+
+
+def test_tool_heavy_turns_no_longer_evict_the_conversation(brain):
+    """The regression this replaced: counting raw messages meant a few
+    tool-heavy turns pushed the actual dialogue out of the window."""
+    brain.history = []
+    for i in range(4):
+        brain.history.append(_turn(f"question {i}"))
+        brain.history.extend(_tool_exchange(3))
+        brain.history.append({"role": "assistant", "content": f"answer {i}"})
+    brain._trim()
+    spoken = [m["content"] for m in brain.history if brain._is_user_turn(m)]
+    assert spoken == [f"question {i}" for i in range(4)]
+
+
+def test_whole_turns_are_dropped_together(brain):
+    """Cutting mid-turn would orphan a tool_result from its tool_use."""
+    brain.history = []
+    for i in range(claude_client.MAX_TURNS + 3):
+        brain.history.append(_turn(f"q{i}"))
+        brain.history.extend(_tool_exchange())
+    brain._trim()
+    assert brain._is_user_turn(brain.history[0])
+    assert len(brain._turn_starts()) == claude_client.MAX_TURNS
 
 
 def test_trimming_never_leaves_a_dangling_tool_result_first(brain):
     """A history starting on a tool_result (or an assistant turn) is rejected
     by the API — the trim has to drop them."""
-    brain.history = [
-        {"role": "assistant", "content": [{"type": "tool_use"}]},
-        {"role": "user", "content": [{"type": "tool_result"}]},
-    ] * (claude_client.MAX_HISTORY)
-    brain.history.append({"role": "user", "content": "a real question"})
+    brain.history = _tool_exchange() * claude_client.MAX_HISTORY
+    brain.history.append(_turn("a real question"))
     brain._trim()
     assert brain.history
-    assert brain.history[0]["role"] == "user"
-    assert isinstance(brain.history[0]["content"], str)
+    assert brain._is_user_turn(brain.history[0])
+
+
+def test_the_absolute_ceiling_drops_turns_before_max_turns_is_reached(brain):
+    """MAX_HISTORY is the backstop for tool-heavy turns: once the message
+    count is over it, older turns go even though fewer than MAX_TURNS remain.
+
+    The tool loop is bounded at 8 iterations, so one turn tops out around 17
+    messages — the ceiling is only ever reached by several of them together.
+    """
+    brain.history = []
+    for i in range(claude_client.MAX_TURNS):
+        brain.history.append(_turn(f"q{i}"))
+        brain.history.extend(_tool_exchange() * 8)  # the tool-loop bound
+    brain._trim()
+    assert len(brain.history) <= claude_client.MAX_HISTORY
+    assert len(brain._turn_starts()) < claude_client.MAX_TURNS
+
+
+def test_the_ceiling_bottoms_out_at_one_turn(brain):
+    """It can never cut into the live turn: dropping an assistant tool_use
+    without its tool_result would make the history unsendable."""
+    brain.history = [_turn("q")] + _tool_exchange() * 100
+    brain._trim()
+    assert brain._turn_starts() == [0]
+    assert len(brain.history) > claude_client.MAX_HISTORY  # kept whole anyway
+
+
+def test_the_most_recent_turn_is_never_dropped(brain):
+    """Even one oversized turn has to survive — it is the live conversation."""
+    brain.history = [_turn("the only question")]
+    brain.history.extend(_tool_exchange() * 200)
+    brain._trim()
+    assert brain._turn_starts() == [0]
+    assert brain.history[0]["content"] == "the only question"
