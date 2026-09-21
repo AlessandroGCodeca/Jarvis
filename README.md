@@ -189,10 +189,12 @@ venv/bin/pip install -r requirements-dev.txt
 venv/bin/python -m pytest
 ```
 
-470 tests covering the pure-logic backend: date/time parsing, the FTS5 memory
+481 tests covering the pure-logic backend: date/time parsing, the FTS5 memory
 store, language detection, currency conversion, preferences, habits, tasks, the
 offline helpers, home control, memory pruning, the prompt-cache layout, and
-`JarvisBrain`'s formatters, tool dispatch and history trimming. They run in
+`JarvisBrain`'s formatters, tool dispatch and history trimming — plus an
+end-to-end check of the request `process()` actually sends, against a
+recording stand-in for the Anthropic client. They run in
 a few seconds and need no API key, no network and no macOS.
 
 **Safe to run on the Mac that JARVIS actually uses.** Three autouse fixtures in

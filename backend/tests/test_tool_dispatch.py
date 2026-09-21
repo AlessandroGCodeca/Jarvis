@@ -322,16 +322,21 @@ def test_results_come_back_in_request_order(brain, monkeypatch):
 
 
 def test_several_tools_really_do_run_at_the_same_time(brain, monkeypatch):
-    """The barrier only releases once all three are in flight together — if
-    execution were sequential the first would wait there until it times out."""
-    barrier = threading.Barrier(3, timeout=5)
+    """The barrier only releases once all of them are in flight together — if
+    execution were sequential the first would wait there until it times out.
+
+    Its size is derived from the block list so the two can't drift apart; a
+    hand-written count would turn an edited list into a five-second hang
+    instead of a clear failure.
+    """
+    blocks = [_ToolBlock("a"), _ToolBlock("b"), _ToolBlock("c")]
+    barrier = threading.Barrier(len(blocks), timeout=5)
 
     def gated(name, inp):
         barrier.wait()
         return f"ran {name}"
 
     monkeypatch.setattr(brain, "_execute_tool", gated)
-    blocks = [_ToolBlock("a"), _ToolBlock("b"), _ToolBlock("c")]
     assert brain._execute_tools(blocks) == ["ran a", "ran b", "ran c"]
 
 

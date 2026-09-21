@@ -13,8 +13,33 @@ import pytest
 import claude_client
 
 
+# Minimum cacheable prefix, per model. Below it the API silently declines to
+# cache: no error, just cache_creation_input_tokens: 0. The value is not
+# monotonic across generations, so it has to be looked up rather than assumed.
+MIN_CACHEABLE_PREFIX_TOKENS = {
+    "claude-haiku-4-5": 4096,
+    "claude-opus-4-6": 4096,
+    "claude-opus-4-8": 1024,
+    "claude-sonnet-5": 1024,
+    "claude-opus-5": 512,
+}
+# An unknown/overridden CLAUDE_MODEL is held to the largest known minimum.
+STRICTEST_MINIMUM = max(MIN_CACHEABLE_PREFIX_TOKENS.values())
+
+# messages.count_tokens is the exact answer, but it needs a network call and
+# this suite forbids those, so the check uses the usual four-chars-per-token
+# rule of thumb — and demands enough headroom that the approximation can be
+# well wrong and the prefix still cache.
+CHARS_PER_TOKEN = 4
+REQUIRED_MARGIN = 1.25
+
+
 def _blocks(brain, **kw):
     return brain._system_prompt(**kw)
+
+
+def _approx_tokens(obj) -> float:
+    return len(json.dumps(obj)) / CHARS_PER_TOKEN
 
 
 @pytest.fixture
@@ -39,10 +64,22 @@ def test_only_the_final_tool_carries_the_breakpoint():
 
 
 def test_the_tool_block_clears_the_minimum_cacheable_prefix():
-    """Haiku 4.5 needs 4096 tokens before it will cache at all; below that it
-    silently doesn't, with no error."""
-    approx_tokens = len(json.dumps(claude_client.TOOLS)) / 4
-    assert approx_tokens > 4096
+    """The configured model won't cache a prefix shorter than its minimum, and
+    says nothing when it declines — so trimming the tool list could silently
+    switch caching off."""
+    minimum = MIN_CACHEABLE_PREFIX_TOKENS.get(
+        claude_client.MODEL, STRICTEST_MINIMUM
+    )
+    assert _approx_tokens(claude_client.TOOLS) > minimum * REQUIRED_MARGIN
+
+
+def test_the_configured_model_has_a_known_cache_minimum():
+    """If CLAUDE_MODEL moves to a model that isn't in the table, the test above
+    silently falls back to the strictest value — flag that rather than hide it."""
+    assert claude_client.MODEL in MIN_CACHEABLE_PREFIX_TOKENS, (
+        f"{claude_client.MODEL} has no recorded minimum cacheable prefix; add "
+        "it to MIN_CACHEABLE_PREFIX_TOKENS so the margin check stays honest."
+    )
 
 
 def test_the_tool_schemas_are_stable_across_turns():
