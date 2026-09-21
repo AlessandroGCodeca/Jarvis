@@ -22,6 +22,7 @@ import currency_module
 import documents_module
 import files_module
 import habits_module
+import home_module
 import language_module
 import mail_module
 import memory
@@ -1074,6 +1075,44 @@ TOOLS = [
             "required": ["contact", "message"],
         },
     },
+    {
+        "name": "list_home_devices",
+        "description": (
+            "List the HomeKit controls available (scenes and accessories, each "
+            "backed by a shortcut in the Shortcuts app). Use this when the user "
+            "asks what you can control, or when a name they said isn't found."
+        ),
+        "input_schema": {"type": "object", "properties": {}, "required": []},
+    },
+    {
+        "name": "home_control",
+        "description": (
+            "Run a HomeKit scene or accessory control by name, e.g. 'Good "
+            "Night', 'Living Room Lights', 'Movie Time'. The name is matched "
+            "loosely, so speak it the way the user did. Anything involving a "
+            "lock, door, garage, gate or alarm requires confirmation: call it "
+            "once without confirmed, read the confirmation question back to "
+            "the user, and only call again with confirmed=true after they say "
+            "yes."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": "string",
+                    "description": "The scene or accessory control to run.",
+                },
+                "confirmed": {
+                    "type": "boolean",
+                    "description": (
+                        "True only after the user confirmed out loud. Required "
+                        "for locks, doors, garages, gates and alarms."
+                    ),
+                },
+            },
+            "required": ["name"],
+        },
+    },
 ]
 
 
@@ -1830,6 +1869,15 @@ class JarvisBrain:
                         f"{contact} on WhatsApp? I won't send until you say yes."
                     )
                 return messages_module.send_whatsapp(contact, message)
+
+            if name == "list_home_devices":
+                return home_module.list_home_devices()
+
+            if name == "home_control":
+                inp = tool_input or {}
+                return home_module.run_home_shortcut(
+                    inp.get("name", ""), confirmed=bool(inp.get("confirmed"))
+                )
 
             return f"Unknown tool: {name}"
         except Exception as exc:  # noqa: BLE001 - keep the loop alive

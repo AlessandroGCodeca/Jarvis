@@ -11,6 +11,7 @@ import pytest
 
 import calendar_module
 import claude_client
+import home_module
 import messages_module
 import offline_module
 import spotify_module
@@ -155,6 +156,78 @@ def test_a_falsy_confirmation_flag_still_blocks_the_send(brain, monkeypatch, fal
         {"contact": "Mum", "message": "hi", "confirmed": falsy},
     )
     assert sent == []
+
+
+# --- home control -----------------------------------------------------------
+
+
+def test_listing_home_devices_routes_to_the_module(brain, monkeypatch):
+    monkeypatch.setattr(
+        home_module, "list_home_devices", lambda: "I can run 2 home controls: A, B."
+    )
+    assert "2 home controls" in brain._execute_tool("list_home_devices", {})
+
+
+def test_home_control_passes_the_name_through(brain, monkeypatch):
+    seen = []
+    monkeypatch.setattr(
+        home_module,
+        "run_home_shortcut",
+        lambda name, confirmed=False: seen.append((name, confirmed)) or "Done.",
+    )
+    brain._execute_tool("home_control", {"name": "Movie Time"})
+    assert seen == [("Movie Time", False)]
+
+
+def test_home_control_forwards_an_explicit_confirmation(brain, monkeypatch):
+    seen = []
+    monkeypatch.setattr(
+        home_module,
+        "run_home_shortcut",
+        lambda name, confirmed=False: seen.append((name, confirmed)) or "Done.",
+    )
+    brain._execute_tool(
+        "home_control", {"name": "Unlock Front Door", "confirmed": True}
+    )
+    assert seen == [("Unlock Front Door", True)]
+
+
+@pytest.mark.parametrize("falsy", [False, None, 0, "", "no"])
+def test_only_a_real_confirmation_reaches_the_module(brain, monkeypatch, falsy):
+    """Anything Claude sends that isn't truthy must arrive as confirmed=False,
+    so the module's own lock gate still applies."""
+    seen = []
+    monkeypatch.setattr(
+        home_module,
+        "run_home_shortcut",
+        lambda name, confirmed=False: seen.append(confirmed) or "Done.",
+    )
+    brain._execute_tool(
+        "home_control", {"name": "Unlock Front Door", "confirmed": falsy}
+    )
+    assert seen == [bool(falsy)]
+
+
+def test_an_unconfirmed_lock_is_refused_end_to_end(brain, monkeypatch):
+    """Dispatch + module together: the Shortcuts CLI is never invoked."""
+    ran = []
+    monkeypatch.setattr(
+        home_module,
+        "_run_shortcuts",
+        lambda args, timeout=None: ran.append(args)
+        or (("Unlock Front Door\n", None) if args[0] == "list" else ("", None)),
+    )
+    out = brain._execute_tool("home_control", {"name": "unlock front door"})
+    assert "confirm" in out.lower()
+    assert [a for a in ran if a[0] == "run"] == []
+
+
+def test_home_control_still_works_while_offline(brain, offline, monkeypatch):
+    """HomeKit is local, so offline mode must not short-circuit it."""
+    monkeypatch.setattr(
+        home_module, "run_home_shortcut", lambda name, confirmed=False: "Done."
+    )
+    assert brain._execute_tool("home_control", {"name": "Movie Time"}) == "Done."
 
 
 # --- offline degradation ----------------------------------------------------

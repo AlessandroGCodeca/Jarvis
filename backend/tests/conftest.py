@@ -6,9 +6,9 @@ write to the real Reminders app and the real memory database:
 
 * ``_isolated_state`` points the SQLite store and the preferences file at a
   per-test temporary directory.
-* ``_no_applescript`` makes every ``osascript`` call behave exactly as it does
-  off-macOS (graceful "not available"), so no test can mutate Calendar,
-  Reminders, Notes, Mail or Messages.
+* ``_no_os_automation`` makes every ``osascript`` and ``shortcuts`` call
+  behave exactly as it does off-macOS (graceful "not available"), so no test
+  can mutate Calendar, Reminders, Notes, Mail, Messages or HomeKit.
 * ``_no_network`` turns any unmocked HTTP call into a loud failure, so a test
   can never silently depend on the network.
 
@@ -27,6 +27,7 @@ os.environ.setdefault("ANTHROPIC_API_KEY", "test-key-not-real")
 
 import httpx  # noqa: E402
 
+import home_module  # noqa: E402
 import memory  # noqa: E402
 import offline_module  # noqa: E402
 import preferences_module  # noqa: E402
@@ -49,24 +50,37 @@ def _isolated_state(tmp_path, monkeypatch):
         offline_module, "_state", {"offline": False, "checked_at": 0.0}
     )
     monkeypatch.setattr(offline_module, "_cache", {})
+    # home_module caches the Shortcuts listing in a module global.
+    monkeypatch.setattr(
+        home_module, "_cache", {"names": None, "folder": None, "ts": 0.0}
+    )
     yield
 
 
-@pytest.fixture(autouse=True)
-def _no_applescript(monkeypatch):
-    """Make osascript calls fail the way they do off-macOS.
+# Binaries that reach out and change the real machine: osascript drives
+# Calendar/Reminders/Notes/Mail/Messages, and shortcuts drives HomeKit — a
+# stray `shortcuts run "Unlock Front Door"` during a test is exactly the kind
+# of thing this suite must make impossible.
+_BLOCKED_BINARIES = ("osascript", "shortcuts")
 
-    Every bridge module funnels through ``subprocess.run(["osascript", ...])``
-    and already handles FileNotFoundError as "not running on macOS", so raising
-    it here exercises the real graceful-degradation path without touching any
-    app. Non-osascript subprocess calls pass through untouched.
+
+@pytest.fixture(autouse=True)
+def _no_os_automation(monkeypatch):
+    """Make macOS automation binaries fail the way they do off-macOS.
+
+    Both bridges funnel through ``subprocess.run`` and already handle
+    FileNotFoundError as "not available on this machine", so raising it here
+    exercises the real graceful-degradation path without touching any app or
+    accessory. Every other subprocess call passes through untouched.
     """
     real_run = subprocess.run
 
     def guarded_run(args, *pos, **kwargs):
         argv0 = args[0] if isinstance(args, (list, tuple)) and args else args
-        if isinstance(argv0, str) and "osascript" in argv0:
-            raise FileNotFoundError("osascript blocked in tests")
+        if isinstance(argv0, str):
+            binary = argv0.rsplit("/", 1)[-1]
+            if binary in _BLOCKED_BINARIES:
+                raise FileNotFoundError(f"{binary} blocked in tests")
         return real_run(args, *pos, **kwargs)
 
     monkeypatch.setattr(subprocess, "run", guarded_run)
