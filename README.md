@@ -189,6 +189,10 @@ venv/bin/pip install -r requirements-dev.txt
 venv/bin/python -m pytest
 ```
 
+Once they're installed, the `jarvis` launcher keeps them current:
+`check_requirements.sh` refreshes dev dependencies after a pull whenever it
+finds them already present, and leaves a runtime-only setup lean otherwise.
+
 481 tests covering the pure-logic backend: date/time parsing, the FTS5 memory
 store, language detection, currency conversion, preferences, habits, tasks, the
 offline helpers, home control, memory pruning, the prompt-cache layout, and
