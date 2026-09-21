@@ -12,6 +12,8 @@ Rules:
   (20:00 for "tonight").
 - A bare hour with no AM/PM: 1-6 means PM (13:00-18:00), 7-11 means AM;
   12 means noon; 13+ is already unambiguous.
+- Numeric dates follow the Prague day-first convention (10.6. = 10 June),
+  except ISO-8601 (2026-06-12), which is always year-month-day.
 """
 
 import datetime
@@ -51,6 +53,8 @@ _HM_RE = re.compile(r"\b(\d{1,2}):(\d{2})\s*(a\.?m\.?|p\.?m\.?)?", re.IGNORECASE
 _H_MERIDIEM_RE = re.compile(r"\b(\d{1,2})\s*(a\.?m\.?|p\.?m\.?)", re.IGNORECASE)
 # "at 9" — bare hour introduced by "at".
 _AT_H_RE = re.compile(r"\bat\s+(\d{1,2})\b", re.IGNORECASE)
+# "2026-06-12" — ISO-8601, unambiguously year-month-day.
+_ISO_DATE_RE = re.compile(r"\b\d{4}-\d{1,2}-\d{1,2}\b")
 
 
 def now_prague() -> datetime.datetime:
@@ -164,11 +168,15 @@ def parse_datetime(text: str):
     # Absolute date part (e.g. "June 10", "10.6.", "2026-06-10").
     if base is None and leftover and any(c.isalnum() for c in leftover):
         if _du_parser:
+            # Day-first matches the Prague convention (10.6. = 10 June),
+            # but it must not be applied to ISO-8601: dateutil would read
+            # "2026-06-12" as 6 December.
+            day_first = not _ISO_DATE_RE.search(leftover)
             try:
                 base = _du_parser.parse(
                     leftover,
                     fuzzy=True,
-                    dayfirst=True,  # Prague convention: 10.6. = 10 June
+                    dayfirst=day_first,
                     default=now.replace(
                         hour=9, minute=0, second=0, microsecond=0
                     ),
