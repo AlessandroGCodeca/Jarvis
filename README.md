@@ -137,15 +137,30 @@ command can't unlock your front door. Everything else runs immediately.
 - `main.py` — FastAPI app + `/ws` WebSocket. Accepts `{type:"message", content}`
   and `{type:"ping"}`; replies with `{type:"response", text, audio}` /
   `{type:"pong"}`. CORS is enabled for `localhost:5173`.
-- `claude_client.py` — `JarvisBrain` keeps the last ~20 messages and runs a
-  synchronous tool-use loop. Tools: `get_calendar`, `get_emails`, `create_note`,
-  `search_web`, `run_command`. Model defaults to `claude-haiku-4-5` (override
-  with `CLAUDE_MODEL`).
+- `claude_client.py` — `JarvisBrain` keeps the last `MAX_TURNS` conversational
+  exchanges (counted as turns, not messages, so a tool-heavy turn can't evict
+  the conversation) and runs a tool-use loop. Tools: `get_calendar`,
+  `get_emails`, `create_note`, `search_web`, `run_command`, … Model defaults to
+  `claude-haiku-4-5` (override with `CLAUDE_MODEL`).
+  - **Prompt caching.** The ~6k tokens of tool schemas are byte-identical on
+    every request and get re-sent on every hop of the tool loop, so the last
+    tool carries a cache breakpoint. The system prompt is split in two: an
+    invariant block (also cached) and a per-turn block holding the clock,
+    preferences and recalled memories. Order matters — the API caches by
+    prefix over `tools` → `system` → `messages`, so anything volatile has to
+    sit after the breakpoints. Check it's working via
+    `usage.cache_read_input_tokens`.
+  - **Parallel tools.** When Claude asks for several tools in one turn they
+    run concurrently (up to `MAX_PARALLEL_TOOLS`), since each AppleScript
+    bridge can sit on `osascript` for seconds. Results keep request order.
 - `tts_module.py` — ElevenLabs streaming TTS → base64 MP3; falls back to `say`
   and returns `None` (frontend shows text only).
 - `stt_module.py` — ElevenLabs Scribe speech-to-text behind `POST /stt`; the
   Safari voice path records audio in the browser and transcribes it here.
-- `memory.py` — SQLite FTS5 store: `save_memory`, `search_memory`, `get_recent`.
+- `memory.py` — SQLite FTS5 store: `save_memory`, `search_memory`,
+  `get_recent`. Every exchange is saved, so conversation memories are pruned at
+  startup after `CONVERSATION_RETENTION_DAYS` (90) to keep recall sharp; notes
+  and learned corrections are kept forever.
 - `calendar_module.py` / `mail_module.py` / `notes_module.py` — AppleScript
   bridges, each wrapped to fail gracefully.
 - `browser_module.py` — DuckDuckGo HTML search + stdlib HTML-to-text fetch
@@ -174,10 +189,10 @@ venv/bin/pip install -r requirements-dev.txt
 venv/bin/python -m pytest
 ```
 
-432 tests covering the pure-logic backend: date/time parsing, the FTS5 memory
+470 tests covering the pure-logic backend: date/time parsing, the FTS5 memory
 store, language detection, currency conversion, preferences, habits, tasks, the
-offline helpers, home control, and `JarvisBrain`'s formatters and tool
-dispatch. They run in
+offline helpers, home control, memory pruning, the prompt-cache layout, and
+`JarvisBrain`'s formatters, tool dispatch and history trimming. They run in
 a few seconds and need no API key, no network and no macOS.
 
 **Safe to run on the Mac that JARVIS actually uses.** Three autouse fixtures in

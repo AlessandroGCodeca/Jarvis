@@ -6,6 +6,7 @@ search, and terminal modules. Designed to be driven from an async server via
 ``asyncio.to_thread``.
 """
 
+import concurrent.futures
 import datetime
 import json
 import os
@@ -43,7 +44,14 @@ import wiki_module
 load_dotenv()
 
 MODEL = os.getenv("CLAUDE_MODEL", "claude-haiku-4-5")
-MAX_HISTORY = 20
+# History is capped by conversational turns rather than raw messages: one
+# tool-heavy turn can add a dozen tool_use/tool_result messages, and counting
+# those let two or three of them evict the actual conversation.
+MAX_TURNS = 10
+MAX_HISTORY = 60  # absolute message ceiling, tool traffic included
+# Claude often asks for two or three tools at once and each AppleScript bridge
+# can sit on osascript for seconds, so a turn's calls run concurrently.
+MAX_PARALLEL_TOOLS = 4
 
 # Phrases at the start of a turn that signal the user is correcting JARVIS.
 _CORRECTION_RE = re.compile(
@@ -1115,6 +1123,13 @@ TOOLS = [
     },
 ]
 
+# Prompt caching. The tool schemas are ~6k tokens that are byte-identical on
+# every request, and the tool loop re-sends them on every hop of a turn. The
+# render order is tools -> system -> messages, so a breakpoint on the final
+# tool caches the whole block independently of the system prompt — which
+# carries the current time and so could never cache on its own.
+TOOLS[-1]["cache_control"] = {"type": "ephemeral"}
+
 
 def _format_calendar(events) -> str:
     if isinstance(events, str):
@@ -1238,7 +1253,13 @@ class JarvisBrain:
         memories: str = "",
         language_instruction: str = "",
         context_block: str = "",
-    ) -> str:
+    ):
+        """Build the system prompt as cacheable + per-turn content blocks.
+
+        The first block is byte-identical on every request, so it carries a
+        cache breakpoint; everything that moves (the clock, preferences,
+        recalled memories) goes in the second block, after it.
+        """
         today = datetime.datetime.now().strftime("%A, %B %d, %Y")
         prompt = (
             "You are JARVIS, a voice assistant. Be concise (1-3 sentences "
@@ -1261,8 +1282,12 @@ class JarvisBrain:
             "(iMessage/WhatsApp) without first stating the exact text and "
             "recipient and getting the user's spoken confirmation, then calling "
             "the send tool with confirmed=true. Before running a terminal "
-            f"command, briefly say what you're about to do. Current date: {today}."
+            "command, briefly say what you're about to do."
         )
+        static_block = prompt
+
+        # Everything below varies per turn and must stay after the breakpoint.
+        prompt = f"Current date: {today}."
 
         prefs_json = json.dumps(self.preferences, ensure_ascii=False)
         prompt += (
@@ -1301,7 +1326,15 @@ class JarvisBrain:
                 "\n\nRelevant memories from earlier (use only if helpful):\n"
                 + memories
             )
-        return prompt
+
+        return [
+            {
+                "type": "text",
+                "text": static_block,
+                "cache_control": {"type": "ephemeral"},
+            },
+            {"type": "text", "text": prompt},
+        ]
 
     def _recall_block(self, query: str) -> str:
         """Search memory for ``query`` and return the top 3 hits as text."""
@@ -1460,6 +1493,27 @@ class JarvisBrain:
                     memory.save_memory(f"User asked me to remember: {note}", tag="note")
                 except Exception:  # noqa: BLE001
                     pass
+
+    def _execute_tools(self, blocks):
+        """Run one turn's tool calls, concurrently when there are several.
+
+        Claude regularly asks for two or three at once ("what's on my calendar
+        and did I get any mail?") and each AppleScript bridge can sit on
+        osascript for seconds, so running them in sequence costs the user the
+        sum rather than the max. Results stay in request order, and
+        ``_execute_tool`` already converts any failure into text, so one slow
+        or broken tool can't take the others down.
+        """
+        if not blocks:
+            return []
+        if len(blocks) == 1:
+            return [self._execute_tool(blocks[0].name, blocks[0].input)]
+        with concurrent.futures.ThreadPoolExecutor(
+            max_workers=min(len(blocks), MAX_PARALLEL_TOOLS)
+        ) as pool:
+            return list(
+                pool.map(lambda b: self._execute_tool(b.name, b.input), blocks)
+            )
 
     def _execute_tool(self, name: str, tool_input: dict) -> str:
         """Dispatch a tool call to the matching module. Always returns text."""
@@ -1883,18 +1937,36 @@ class JarvisBrain:
         except Exception as exc:  # noqa: BLE001 - keep the loop alive
             return f"Tool '{name}' failed: {exc}"
 
+    @staticmethod
+    def _is_user_turn(message) -> bool:
+        """True for a genuine spoken turn, not a tool_result payload."""
+        return message["role"] == "user" and isinstance(message["content"], str)
+
+    def _turn_starts(self):
+        return [i for i, m in enumerate(self.history) if self._is_user_turn(m)]
+
     def _trim(self) -> None:
-        """Cap history without orphaning a tool_use/tool_result pair."""
-        if len(self.history) <= MAX_HISTORY:
-            return
-        self.history = self.history[-MAX_HISTORY:]
-        # Ensure we start on a genuine user text turn, not a dangling
-        # assistant turn or a bare tool_result.
-        while self.history and not (
-            self.history[0]["role"] == "user"
-            and isinstance(self.history[0]["content"], str)
-        ):
+        """Cap history by conversational turn, dropping whole turns at a time.
+
+        Counting raw messages meant a couple of tool-heavy turns could evict
+        the actual conversation, since every tool_use/tool_result pair counted
+        against the same budget. Cutting on user-turn boundaries keeps the last
+        MAX_TURNS exchanges intact with their tool traffic, and inherently
+        leaves the history starting on a genuine user turn — which the API
+        requires. MAX_HISTORY stays as a backstop for one pathological turn.
+        """
+        # Never start on a dangling assistant turn or a bare tool_result.
+        while self.history and not self._is_user_turn(self.history[0]):
             self.history.pop(0)
+
+        while True:
+            starts = self._turn_starts()
+            if len(starts) <= 1:
+                return  # keep the most recent turn whole, whatever its size
+            if len(starts) > MAX_TURNS or len(self.history) > MAX_HISTORY:
+                self.history = self.history[starts[1] :]
+            else:
+                return
 
     def process(self, user_text: str) -> str:
         """Run one turn (including any tool calls) and return the reply text."""
@@ -1943,17 +2015,15 @@ class JarvisBrain:
                 self.history.append(
                     {"role": "assistant", "content": response.content}
                 )
-                tool_results = []
-                for block in response.content:
-                    if block.type == "tool_use":
-                        result = self._execute_tool(block.name, block.input)
-                        tool_results.append(
-                            {
-                                "type": "tool_result",
-                                "tool_use_id": block.id,
-                                "content": result,
-                            }
-                        )
+                blocks = [b for b in response.content if b.type == "tool_use"]
+                tool_results = [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": block.id,
+                        "content": result,
+                    }
+                    for block, result in zip(blocks, self._execute_tools(blocks))
+                ]
                 self.history.append({"role": "user", "content": tool_results})
                 continue
 

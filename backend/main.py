@@ -87,6 +87,14 @@ async def lifespan(app: FastAPI):
     memory.init_db()
     tasks_module.init_tasks_table()
     habits_module.init_habits_tables()
+    # Age out old conversation memories so recall stays useful over time.
+    try:
+        pruned = memory.prune_old_memories()
+        if pruned:
+            print(f"Pruned {pruned} conversation memories older than "
+                  f"{memory.CONVERSATION_RETENTION_DAYS} days.")
+    except Exception:  # noqa: BLE001 - housekeeping must not block startup
+        pass
     try:
         await offline_module.check_connectivity()
     except Exception:  # noqa: BLE001
