@@ -31,6 +31,7 @@ import home_module  # noqa: E402
 import memory  # noqa: E402
 import offline_module  # noqa: E402
 import preferences_module  # noqa: E402
+import tts_module  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
@@ -54,6 +55,8 @@ def _isolated_state(tmp_path, monkeypatch):
     monkeypatch.setattr(
         home_module, "_cache", {"names": None, "folder": None, "ts": 0.0}
     )
+    # tts_module remembers which failures it has already reported.
+    monkeypatch.setattr(tts_module, "_reported_failures", set())
     yield
 
 

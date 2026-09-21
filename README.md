@@ -203,7 +203,7 @@ Once they're installed, the `jarvis` launcher keeps them current:
 `check_requirements.sh` refreshes dev dependencies after a pull whenever it
 finds them already present, and leaves a runtime-only setup lean otherwise.
 
-488 tests covering the pure-logic backend: date/time parsing, the FTS5 memory
+506 tests covering the pure-logic backend: date/time parsing, the FTS5 memory
 store, language detection, currency conversion, preferences, habits, tasks, the
 offline helpers, home control, memory pruning, the prompt-cache layout, and
 `JarvisBrain`'s formatters, tool dispatch and history trimming — plus an
@@ -260,6 +260,28 @@ warm imports are near-instant.
   — expect ~1–2 s warm. If it's slow *every* time (not just the first), the
   venv likely fell back to source builds or pure-Python code paths; recreate
   it on Python 3.12 with `./setup.sh`.
+
+### JARVIS replies in text but never speaks
+
+Speech synthesis failing is otherwise invisible — the reply arrives, the orb
+behaves, there is just no voice. The backend prints the reason once per
+distinct failure:
+
+```
+TTS unavailable — HTTP 400: API key ID used as API key — only valid API keys
+can be used. API keys start with 'sk_' and are shown when the key is created
+or rotated.
+```
+
+That one means `ELEVENLABS_API_KEY` holds the key *ID* rather than the key.
+Create or rotate a key at elevenlabs.io and copy the value beginning with
+`sk_` (it is shown only once). The same key is used for Safari's voice input
+(`POST /stt`), so a bad one disables speech in both directions.
+
+Other common reasons: `401` (wrong key), `404` (unknown
+`ELEVENLABS_VOICE_ID`), `429` (rate limited or out of quota). With no key
+configured at all, JARVIS falls back to the macOS `say` command — audible from
+the Mac itself, with nothing sent to the browser.
 
 ### White page / dev-server assets returning 504
 

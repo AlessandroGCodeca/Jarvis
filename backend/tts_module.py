@@ -55,6 +55,41 @@ def _say_fallback(text: str) -> None:
         pass
 
 
+# Failures are reported once per distinct reason: a bad key fails on every
+# sentence of every reply, and repeating it would bury the rest of the log.
+_reported_failures: set[str] = set()
+
+
+def _reason(resp) -> str:
+    """Pull the human-readable message out of an ElevenLabs error body."""
+    try:
+        detail = resp.json().get("detail")
+        if isinstance(detail, dict):
+            return detail.get("message") or detail.get("status") or resp.text[:200]
+        if isinstance(detail, str):
+            return detail
+    except Exception:  # noqa: BLE001 - not JSON, fall back to raw text
+        pass
+    return (resp.text or "").strip()[:200] or "no details"
+
+
+def _report_failure(reason: str) -> None:
+    """Print why speech synthesis failed — once per distinct reason.
+
+    Without this the failure is invisible: JARVIS answers in text and simply
+    never speaks, with nothing in the log to say why.
+    """
+    if reason in _reported_failures:
+        return
+    _reported_failures.add(reason)
+    print(f"TTS unavailable — {reason}", flush=True)
+
+
+def reset_failure_reporting() -> None:
+    """Forget which failures have been reported (used by the tests)."""
+    _reported_failures.clear()
+
+
 async def _synth_elevenlabs(text: str, language_code: str = None):
     """Synthesize ``text`` via ElevenLabs → raw MP3 bytes, or None on failure.
 
@@ -90,12 +125,21 @@ async def _synth_elevenlabs(text: str, language_code: str = None):
             async with client.stream(
                 "POST", url, headers=headers, params=params, json=payload
             ) as resp:
-                resp.raise_for_status()
+                if resp.status_code >= 400:
+                    # Read the streamed body so the reason is available; a
+                    # streaming response has no .text until it is consumed.
+                    await resp.aread()
+                    _report_failure(f"HTTP {resp.status_code}: {_reason(resp)}")
+                    return None
                 async for chunk in resp.aiter_bytes():
                     if chunk:
                         chunks.extend(chunk)
-        return bytes(chunks) if chunks else None
-    except Exception:  # noqa: BLE001 - caller decides how to fall back
+        if not chunks:
+            _report_failure("the service returned no audio")
+            return None
+        return bytes(chunks)
+    except Exception as exc:  # noqa: BLE001 - caller decides how to fall back
+        _report_failure(f"{type(exc).__name__}: {exc}")
         return None
 
 
