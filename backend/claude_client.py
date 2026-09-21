@@ -1217,6 +1217,53 @@ def _format_messages(items) -> str:
     return "Recent messages:\n" + "\n".join(lines)
 
 
+class _TurnUsage:
+    """Token counts accumulated across one turn's API calls.
+
+    A turn can make up to 8 calls (the tool loop), and each re-sends the whole
+    prefix, so per-call numbers are hard to read. Summing them gives the figure
+    that actually matters: what the turn cost, and how much of it was served
+    from cache.
+    """
+
+    __slots__ = ("calls", "uncached", "cache_read", "cache_write", "output")
+
+    def __init__(self):
+        self.calls = 0
+        self.uncached = 0
+        self.cache_read = 0
+        self.cache_write = 0
+        self.output = 0
+
+    def add(self, response) -> None:
+        """Fold in one response's usage. Tolerates a response without any."""
+        usage = getattr(response, "usage", None)
+        if usage is None:
+            return
+        self.calls += 1
+        self.uncached += getattr(usage, "input_tokens", 0) or 0
+        self.cache_read += getattr(usage, "cache_read_input_tokens", 0) or 0
+        self.cache_write += getattr(usage, "cache_creation_input_tokens", 0) or 0
+        self.output += getattr(usage, "output_tokens", 0) or 0
+
+    def summary(self) -> str:
+        """One compact line, or "" when the responses carried no usage."""
+        if not self.calls:
+            return ""
+        cached_total = self.cache_read + self.cache_write
+        pct = (
+            round(100 * self.cache_read / (self.uncached + cached_total))
+            if (self.uncached + cached_total)
+            else 0
+        )
+        call_word = "call" if self.calls == 1 else "calls"
+        return (
+            f"tokens: {self.calls} {call_word} · in {self.uncached:,} "
+            f"· cache read {self.cache_read:,} ({pct}%) "
+            f"· cache write {self.cache_write:,} · out {self.output:,}"
+        )
+
+
 # Upcoming-events cache for the per-turn context block (calendar reads are slow).
 _CTX_CACHE = {"events": None, "ts": 0.0}
 _CTX_TTL = 300  # seconds
@@ -1938,6 +1985,20 @@ class JarvisBrain:
             return f"Tool '{name}' failed: {exc}"
 
     @staticmethod
+    def _report_usage(usage: "_TurnUsage") -> None:
+        """Print one line per turn so prompt caching is observable.
+
+        Without this there is no way to tell whether the cached prefix is
+        actually being hit — a silent invalidation looks exactly like a cache
+        that is working. Set JARVIS_QUIET_USAGE=1 to suppress.
+        """
+        if os.getenv("JARVIS_QUIET_USAGE"):
+            return
+        line = usage.summary()
+        if line:
+            print(line, flush=True)
+
+    @staticmethod
     def _is_user_turn(message) -> bool:
         """True for a genuine spoken turn, not a tool_result payload."""
         return message["role"] == "user" and isinstance(message["content"], str)
@@ -2002,6 +2063,7 @@ class JarvisBrain:
         )
 
         # Bound the number of tool iterations to avoid runaway loops.
+        usage = _TurnUsage()
         for _ in range(8):
             response = self.client.messages.create(
                 model=MODEL,
@@ -2010,6 +2072,7 @@ class JarvisBrain:
                 tools=TOOLS,
                 messages=self.history,
             )
+            usage.add(response)
 
             if response.stop_reason == "tool_use":
                 self.history.append(
@@ -2038,10 +2101,12 @@ class JarvisBrain:
             )
             # Remember this reply so the next turn can detect a correction of it.
             self._last_response = text
+            self._report_usage(usage)
             return text or "(no response)"
 
         # Safety net if the tool loop never settled.
         fallback = "I got stuck working through that — could you rephrase?"
         self.history.append({"role": "assistant", "content": fallback})
         self._trim()
+        self._report_usage(usage)
         return fallback

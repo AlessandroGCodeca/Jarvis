@@ -148,8 +148,18 @@ command can't unlock your front door. Everything else runs immediately.
     invariant block (also cached) and a per-turn block holding the clock,
     preferences and recalled memories. Order matters — the API caches by
     prefix over `tools` → `system` → `messages`, so anything volatile has to
-    sit after the breakpoints. Check it's working via
-    `usage.cache_read_input_tokens`.
+    sit after the breakpoints. Every turn prints one line so this is
+    observable — a silently invalidated cache otherwise looks exactly like a
+    working one:
+
+    ```
+    tokens: 1 call · in 430 · cache read 0 (0%) · cache write 6,013 · out 62
+    tokens: 1 call · in 520 · cache read 6,013 (92%) · cache write 0 · out 48
+    ```
+
+    The first turn writes the cache; from the second on, `cache read` should
+    be non-zero. If it stays at 0, something in the prefix is changing between
+    requests. Set `JARVIS_QUIET_USAGE=1` to silence the line.
   - **Parallel tools.** When Claude asks for several tools in one turn they
     run concurrently (up to `MAX_PARALLEL_TOOLS`), since each AppleScript
     bridge can sit on `osascript` for seconds. Results keep request order.
@@ -193,7 +203,7 @@ Once they're installed, the `jarvis` launcher keeps them current:
 `check_requirements.sh` refreshes dev dependencies after a pull whenever it
 finds them already present, and leaves a runtime-only setup lean otherwise.
 
-481 tests covering the pure-logic backend: date/time parsing, the FTS5 memory
+488 tests covering the pure-logic backend: date/time parsing, the FTS5 memory
 store, language detection, currency conversion, preferences, habits, tasks, the
 offline helpers, home control, memory pruning, the prompt-cache layout, and
 `JarvisBrain`'s formatters, tool dispatch and history trimming — plus an
