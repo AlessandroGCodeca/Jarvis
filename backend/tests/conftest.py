@@ -10,7 +10,8 @@ write to the real Reminders app and the real memory database:
   behave exactly as it does off-macOS (graceful "not available"), so no test
   can mutate Calendar, Reminders, Notes, Mail, Messages or HomeKit.
 * ``_no_network`` turns any unmocked HTTP call into a loud failure, so a test
-  can never silently depend on the network.
+  can never silently depend on the network — including calls made through the
+  Anthropic SDK, which ships its own httpx fork.
 
 Tests that need a stubbed HTTP response or AppleScript reply monkeypatch the
 specific function they care about; a later monkeypatch wins over these guards.
@@ -26,6 +27,11 @@ import pytest
 os.environ.setdefault("ANTHROPIC_API_KEY", "test-key-not-real")
 
 import httpx  # noqa: E402
+
+try:  # The Anthropic SDK builds its client from a vendored httpx fork.
+    import httpx2  # noqa: E402
+except ImportError:  # pragma: no cover - only if the SDK stops shipping it
+    httpx2 = None
 
 import home_module  # noqa: E402
 import memory  # noqa: E402
@@ -102,6 +108,13 @@ def _no_network(monkeypatch):
 
     for attr in ("get", "post", "head", "request", "Client", "AsyncClient"):
         monkeypatch.setattr(httpx, attr, blocked, raising=False)
+
+    # The SDK subclasses httpx2.AsyncClient at import time, so replacing the
+    # module attribute would come too late — the subclass already exists.
+    # Blocking `send` on the base class covers it, and every instance.
+    if httpx2 is not None:
+        for client_class in (httpx2.Client, httpx2.AsyncClient):
+            monkeypatch.setattr(client_class, "send", blocked, raising=False)
     yield
 
 

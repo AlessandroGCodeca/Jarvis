@@ -25,6 +25,7 @@ from fastapi.responses import JSONResponse
 import habits_module
 import memory
 import offline_module
+import preflight
 import stt_module
 import tasks_module
 import tts_module
@@ -99,6 +100,11 @@ async def lifespan(app: FastAPI):
         await offline_module.check_connectivity()
     except Exception:  # noqa: BLE001
         pass
+
+    # Ask each service whether its key actually works, before anyone can talk
+    # to JARVIS. A wrong key otherwise stays invisible until first use, where
+    # it looks like the feature is simply broken. Never blocks the boot.
+    await preflight.run()
 
     print(f"📱 iPhone companion URL: http://{_local_ip()}:8000/voice")
 

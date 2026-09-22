@@ -60,8 +60,12 @@ def _say_fallback(text: str) -> None:
 _reported_failures: set[str] = set()
 
 
-def _reason(resp) -> str:
-    """Pull the human-readable message out of an ElevenLabs error body."""
+def error_reason(resp) -> str:
+    """Pull the human-readable message out of an ElevenLabs error body.
+
+    Shared with the boot-time preflight (``preflight.py``), which probes the
+    same API and gets errors in the same ``{"detail": ...}`` envelope.
+    """
     try:
         detail = resp.json().get("detail")
         if isinstance(detail, dict):
@@ -129,7 +133,9 @@ async def _synth_elevenlabs(text: str, language_code: str = None):
                     # Read the streamed body so the reason is available; a
                     # streaming response has no .text until it is consumed.
                     await resp.aread()
-                    _report_failure(f"HTTP {resp.status_code}: {_reason(resp)}")
+                    _report_failure(
+                        f"HTTP {resp.status_code}: {error_reason(resp)}"
+                    )
                     return None
                 async for chunk in resp.aiter_bytes():
                     if chunk:
