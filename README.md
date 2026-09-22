@@ -77,6 +77,29 @@ You should see `JARVIS backend: loading...` immediately, then uvicorn's
 startup lines once it binds. Health check: `curl localhost:8000` returns
 `{"status":"ok","service":"JARVIS"}`.
 
+Boot also asks each service you configured whether its key actually works,
+before anything can use one:
+
+```
+JARVIS preflight:
+  ✓ Anthropic   key valid, model claude-haiku-4-5
+  ✓ ElevenLabs  key valid, 12,345 of 100,000 characters used
+  ✓ Voice ID    d3VVY8da... resolves to "El Flash V2"
+  – Spotify     not configured — "play <song>" opens a search instead
+```
+
+`✓` the credential works, `✗` it doesn't and the line says why, `–` nothing
+was learned: not configured, unreachable, or already explained by the line
+above. Every key otherwise fails at *first use*, and each one fails quietly in
+its own way — a wrong `ELEVENLABS_API_KEY` just means JARVIS never speaks, a
+stale `ELEVENLABS_VOICE_ID` does the same with a perfectly good key, and a
+wrong `ANTHROPIC_API_KEY` turns the first thing you say into an error.
+
+A `✗` never stops the boot: JARVIS runs exactly as degraded as it would have
+anyway, you just find out now instead of mid-sentence. The probes cost no
+tokens and no characters, run concurrently (a second or so in total) and are
+capped at six seconds each. Skip them with `JARVIS_SKIP_PREFLIGHT=1`.
+
 ### 3. Run the frontend
 
 ```bash
@@ -137,6 +160,17 @@ command can't unlock your front door. Everything else runs immediately.
 - `main.py` — FastAPI app + `/ws` WebSocket. Accepts `{type:"message", content}`
   and `{type:"ping"}`; replies with `{type:"response", text, audio}` /
   `{type:"pong"}`. CORS is enabled for `localhost:5173`.
+- `preflight.py` — the boot-time credential checks behind the summary in
+  Setup above. Each probe is the cheapest request that proves a credential:
+  `GET /v1/models/…` validates the Anthropic key *and* `CLAUDE_MODEL` in one
+  call (a typo in the model name is otherwise a failed reply at first use),
+  `/v1/user/subscription` the ElevenLabs key — with the character quota, since
+  an exhausted one is a 429 mid-reply that looks exactly like a broken key —
+  `/v1/voices/{id}` resolves the voice ID to the voice it names, and a
+  client-credentials token request checks Spotify. A 4xx is the credential
+  being rejected; a timeout, a 5xx or a 404 reports as "couldn't check",
+  because a service having a bad day is no reason to send someone off to
+  re-issue a working key.
 - `claude_client.py` — `JarvisBrain` keeps the last `MAX_TURNS` conversational
   exchanges (counted as turns, not messages, so a tool-heavy turn can't evict
   the conversation) and runs a tool-use loop. Tools: `get_calendar`,
@@ -203,13 +237,13 @@ Once they're installed, the `jarvis` launcher keeps them current:
 `check_requirements.sh` refreshes dev dependencies after a pull whenever it
 finds them already present, and leaves a runtime-only setup lean otherwise.
 
-506 tests covering the pure-logic backend: date/time parsing, the FTS5 memory
+548 tests covering the pure-logic backend: date/time parsing, the FTS5 memory
 store, language detection, currency conversion, preferences, habits, tasks, the
-offline helpers, home control, memory pruning, the prompt-cache layout, and
-`JarvisBrain`'s formatters, tool dispatch and history trimming — plus an
-end-to-end check of the request `process()` actually sends, against a
-recording stand-in for the Anthropic client. They run in
-a few seconds and need no API key, no network and no macOS.
+offline helpers, home control, memory pruning, the prompt-cache layout, the
+boot-time credential preflight, and `JarvisBrain`'s formatters, tool dispatch
+and history trimming — plus an end-to-end check of the request `process()`
+actually sends, against a recording stand-in for the Anthropic client. They
+run in a few seconds and need no API key, no network and no macOS.
 
 **Safe to run on the Mac that JARVIS actually uses.** Three autouse fixtures in
 `tests/conftest.py` make sure of it:
@@ -219,7 +253,9 @@ a few seconds and need no API key, no network and no macOS.
 - every `osascript` and `shortcuts` call is blocked and degrades exactly as it
   does off-macOS, so no test can write to Calendar, Reminders, Notes, Mail or
   Messages, or switch a real light or lock;
-- any unmocked HTTP call fails the test instead of reaching the network.
+- any unmocked HTTP call fails the test instead of reaching the network —
+  including one made through the Anthropic SDK, which ships its own httpx
+  fork and so slipped past the guard until the preflight started using it.
 
 The AppleScript bridges themselves are only covered at the dispatch boundary —
 verifying their AppleScript would mean driving the real apps.
@@ -282,6 +318,11 @@ Other common reasons: `401` (wrong key), `404` (unknown
 `ELEVENLABS_VOICE_ID`), `429` (rate limited or out of quota). With no key
 configured at all, JARVIS falls back to the macOS `say` command — audible from
 the Mac itself, with nothing sent to the browser.
+
+You shouldn't get this far, though: the boot preflight (see Setup) fails the
+`ElevenLabs` line with the same reason, reports what's left of the character
+quota, and resolves `ELEVENLABS_VOICE_ID` to the voice it names — so a wrong
+key or a stale voice ID is a startup message rather than a silent evening.
 
 ### White page / dev-server assets returning 504
 

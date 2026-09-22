@@ -78,32 +78,32 @@ def test_the_message_is_pulled_out_of_an_error_body():
         text='{"detail":{"type":"authentication_error","code":"invalid_api_key",'
         '"message":"API key ID used as API key — only valid API keys can be used."}}',
     )
-    assert tts_module._reason(resp) == (
+    assert tts_module.error_reason(resp) == (
         "API key ID used as API key — only valid API keys can be used."
     )
 
 
 def test_a_string_detail_is_used_directly():
     resp = _FakeResponse(422, text='{"detail":"voice not found"}')
-    assert tts_module._reason(resp) == "voice not found"
+    assert tts_module.error_reason(resp) == "voice not found"
 
 
 def test_a_detail_without_a_message_falls_back_to_its_status():
     resp = _FakeResponse(429, text='{"detail":{"status":"quota_exceeded"}}')
-    assert tts_module._reason(resp) == "quota_exceeded"
+    assert tts_module.error_reason(resp) == "quota_exceeded"
 
 
 def test_a_non_json_body_is_passed_through():
     resp = _FakeResponse(502, text="Bad Gateway")
-    assert tts_module._reason(resp) == "Bad Gateway"
+    assert tts_module.error_reason(resp) == "Bad Gateway"
 
 
 def test_an_empty_body_still_yields_something():
-    assert tts_module._reason(_FakeResponse(500, text="")) == "no details"
+    assert tts_module.error_reason(_FakeResponse(500, text="")) == "no details"
 
 
 def test_a_long_body_is_truncated():
-    assert len(tts_module._reason(_FakeResponse(500, text="x" * 900))) <= 200
+    assert len(tts_module.error_reason(_FakeResponse(500, text="x" * 900))) <= 200
 
 
 # --- reporting --------------------------------------------------------------
